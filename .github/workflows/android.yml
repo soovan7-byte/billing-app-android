@@ -1,39 +1,43 @@
-名称：构建安卓 APK
+name: Build Android APK
 
-在:
-  工作流触发:
+on:
+  workflow_dispatch:
 
-工作:
-  构建:
-    运行于：ubuntu-latest
+jobs:
+  build:
+    runs-on: ubuntu-latest
 
-    步骤:
-      - 名称: 结账
-        使用：actions/checkout@v4
+    steps:
+      # 第一步：检查代码
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    -名称: 安装系统依赖 
-      运行： |
-       请将以下文本翻译成中文:  sudo apt update
-        sudo apt install -y \
-        git 解压 openjdk-17-jdk
-        python3-pip python3-setuptools
-        python3-wheel
-python3-venv
-        sudo apt install -y android-sdk
-        echo "y" | sudo sdkmanager --licenses
+      # 第二步：安装系统依赖
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+          git zip unzip openjdk-17-jdk \
+          python3-pip python3-setuptools \
+          python3-wheel python3-venv
+          sudo apt install -y android-sdk
+          echo "y" | sudo sdkmanager --licenses
 
-      -名称: 安装Buildozer 
-        运行： |
-          使用pip安装buildozer：pip install buildozer
-          使用pip安装cython：pip install cython
+      # 第三步：安装 Buildozer
+      - name: Install Buildozer
+        run: |
+          pip install buildozer
+          pip install cython
 
-      - 名称: 生成 APK
-        运行： |
+      # 第四步：构建 APK
+      - name: Build APK
+        run: |
           buildozer init || true
-          构建ozer 安卓 调试
+          buildozer android debug
 
-      - 名称: 上传 APK
-        使用：actions/upload-artifact@v4
-        与：
-          name： 安卓-apk
-          路径：bin/*.apk
+      # 第五步：上传 APK
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: bin/*.apk
