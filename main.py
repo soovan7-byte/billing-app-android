@@ -1,507 +1,774 @@
-from kivy.config import Config
+# -*- coding: utf-8 -*-
+import os
+import json
+import csv
+from datetime import datetime
 
-# UI config before importing most Kivy widgets
-Config.set('graphics', 'width', '360')
-Config.set('graphics', 'height', '640')
+from kivy.config import Config
+from kivy.utils import platform
+
+# =========================
+# 字体设置
+# =========================
+# 电脑端：优先用 Windows 楷体
+# 安卓端：用项目目录里的 simkai.ttf
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+WINDOWS_FONT_PATH = r"C:\Windows\Fonts\simkai.ttf"
+LOCAL_FONT_PATH = os.path.join(APP_DIR, "simkai.ttf")
+
+font_path = None
+if platform == "win" and os.path.exists(WINDOWS_FONT_PATH):
+    font_path = WINDOWS_FONT_PATH
+elif os.path.exists(LOCAL_FONT_PATH):
+    font_path = LOCAL_FONT_PATH
+
+if font_path:
+    Config.set(
+        "kivy",
+        "default_font",
+        ["AppFont", font_path, font_path, font_path, font_path]
+    )
 
 from kivy.app import App
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.textinput import TextInput
-from kivy.uix.button import Button
-from kivy.uix.spinner import Spinner
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.gridlayout import GridLayout
-from kivy.uix.popup import Popup
-from kivy.graphics import Color, Rectangle
 from kivy.core.window import Window
-from kivy.clock import Clock
-from kivy.utils import get_color_from_hex, platform
-from kivy.metrics import dp
-from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.metrics import dp, sp
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
 from kivy.uix.filechooser import FileChooserListView
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.label import Label
+from kivy.uix.popup import Popup
+from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.spinner import Spinner
+from kivy.uix.textinput import TextInput
+from kivy.graphics import Color, RoundedRectangle
+from kivy.clock import Clock
 
-import csv
-import json
-import os
-from datetime import datetime
 from openpyxl import Workbook, load_workbook
 
-Window.size = (360, 640)
 
-
-def safe_float(value, default=0.0):
-    try:
-        return float(value)
-    except Exception:
-        return default
+# 桌面端可以设置一个最小窗口，安卓端不会受影响
+if platform in ("win", "linux", "macosx"):
+    Window.minimum_width = 380
+    Window.minimum_height = 700
 
 
 class MainScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.name = 'main'
+        self.name = "main"
 
+        self.categories = ["饮食正餐", "娱乐消费", "学习提升", "交通", "水电", "人情世故", "房租", "医疗", "其他"]
         self.records = []
-        self.categories = ['饮食正餐', '娱乐消费', '学习提升', '交通', '水电', '人情世故', '房租', '医疗', '其他']
-        self.records_file = os.path.join(self.get_data_dir(), 'records.json')
-        self.categories_file = os.path.join(self.get_data_dir(), 'categories.json')
 
-        if platform == 'android':
-            self.request_android_permissions()
+        self.storage_dir = self.get_storage_dir()
+        os.makedirs(self.storage_dir, exist_ok=True)
 
-        layout = BoxLayout(orientation='vertical', padding=dp(10), spacing=dp(10))
+        self.records_path = os.path.join(self.storage_dir, "records.json")
+        self.categories_path = os.path.join(self.storage_dir, "categories.json")
 
-        title = Label(
-            text='个人记账',
-            font_size='24sp',
-            bold=True,
-            size_hint=(1, 0.1),
-            color=get_color_from_hex('#2c3e50')
+        self.build_ui()
+        self.load_data()
+        Clock.schedule_once(lambda dt: self.update_monthly_expense(), 0.1)
+
+    # =========================
+    # 基础路径
+    # =========================
+    def get_storage_dir(self):
+        app = App.get_running_app()
+        if platform == "android" and app is not None:
+            return app.user_data_dir
+        return APP_DIR
+
+    def get_export_dir(self):
+        # 安卓优先导出到 Download；失败则回退到 app 私有目录
+        if platform == "android":
+            try:
+                from android.storage import primary_external_storage_path
+                export_dir = os.path.join(primary_external_storage_path(), "Download")
+                os.makedirs(export_dir, exist_ok=True)
+                return export_dir
+            except Exception:
+                pass
+
+        export_dir = os.path.join(self.storage_dir, "exports")
+        os.makedirs(export_dir, exist_ok=True)
+        return export_dir
+
+    def get_default_import_dir(self):
+        export_dir = self.get_export_dir()
+        if os.path.exists(export_dir):
+            return export_dir
+        return self.storage_dir
+
+    # =========================
+    # UI
+    # =========================
+    def build_ui(self):
+        root = BoxLayout(orientation="vertical")
+
+        scroll = ScrollView(size_hint=(1, 1))
+        content = BoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(12), dp(12), dp(12), dp(20)],
+            size_hint_y=None
         )
-        layout.add_widget(title)
+        content.bind(minimum_height=content.setter("height"))
 
-        form_layout = BoxLayout(orientation='vertical', spacing=dp(10))
+        # 标题
+        title = Label(
+            text="个人记账",
+            font_size=sp(26),
+            size_hint_y=None,
+            height=dp(48),
+            color=(0.12, 0.22, 0.36, 1)
+        )
+        content.add_widget(title)
 
-        form_layout.add_widget(Label(text='消费备注:', size_hint=(1, None), height=dp(30)))
+        # 表单卡片
+        form_card = self.make_card()
+        form_layout = BoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=dp(12),
+            size_hint_y=None
+        )
+        form_layout.bind(minimum_height=form_layout.setter("height"))
+
+        form_layout.add_widget(self.make_field_label("消费备注："))
         self.name_input = TextInput(
             multiline=False,
-            size_hint=(1, None),
-            height=dp(40),
-            background_color=get_color_from_hex('#ecf0f1'),
+            size_hint_y=None,
+            height=dp(46),
+            font_size=sp(18),
+            background_normal="",
+            background_active="",
+            background_color=(0.96, 0.96, 0.96, 1),
             foreground_color=(0, 0, 0, 1),
-            cursor_color=(0, 0, 0, 1)
+            cursor_color=(0, 0, 0, 1),
+            padding=[dp(10), dp(10), dp(10), dp(10)]
         )
         form_layout.add_widget(self.name_input)
 
-        form_layout.add_widget(Label(text='分类:', size_hint=(1, None), height=dp(30)))
+        form_layout.add_widget(self.make_field_label("分类："))
         self.category_spinner = Spinner(
-            text='饮食正餐',
+            text="饮食正餐",
             values=self.categories,
-            size_hint=(1, None),
-            height=dp(40)
+            size_hint_y=None,
+            height=dp(46),
+            font_size=sp(18)
         )
         form_layout.add_widget(self.category_spinner)
 
-        form_layout.add_widget(Label(text='金额(元):', size_hint=(1, None), height=dp(30)))
+        form_layout.add_widget(self.make_field_label("金额（元）："))
         self.amount_input = TextInput(
             multiline=False,
-            input_filter='float',
-            size_hint=(1, None),
-            height=dp(40),
-            background_color=get_color_from_hex('#ecf0f1'),
+            input_filter="float",
+            size_hint_y=None,
+            height=dp(46),
+            font_size=sp(18),
+            background_normal="",
+            background_active="",
+            background_color=(0.96, 0.96, 0.96, 1),
             foreground_color=(0, 0, 0, 1),
-            cursor_color=(0, 0, 0, 1)
+            cursor_color=(0, 0, 0, 1),
+            padding=[dp(10), dp(10), dp(10), dp(10)]
         )
         form_layout.add_widget(self.amount_input)
 
-        form_layout.add_widget(Label(text='日期:', size_hint=(1, None), height=dp(30)))
-        date_layout = BoxLayout(orientation='horizontal', spacing=dp(10), size_hint=(1, None), height=dp(60))
-        now = datetime.now()
+        form_layout.add_widget(self.make_field_label("日期："))
 
-        year_layout = BoxLayout(orientation='vertical', spacing=dp(5))
-        year_layout.add_widget(Label(text='年', size_hint=(1, None), height=dp(20)))
+        now = datetime.now()
+        date_layout = GridLayout(cols=3, spacing=dp(10), size_hint_y=None, height=dp(82))
+
+        year_box = BoxLayout(orientation="vertical", spacing=dp(5))
+        year_box.add_widget(Label(text="年", font_size=sp(16), size_hint_y=None, height=dp(24)))
         self.year_input = TextInput(
             text=str(now.year),
             multiline=False,
-            input_filter='int',
-            size_hint=(1, None),
-            height=dp(30),
-            background_color=get_color_from_hex('#ecf0f1'),
+            input_filter="int",
+            size_hint_y=None,
+            height=dp(46),
+            font_size=sp(18),
+            background_normal="",
+            background_active="",
+            background_color=(0.96, 0.96, 0.96, 1),
             foreground_color=(0, 0, 0, 1),
-            cursor_color=(0, 0, 0, 1)
+            cursor_color=(0, 0, 0, 1),
+            padding=[dp(10), dp(10), dp(10), dp(10)]
         )
-        year_layout.add_widget(self.year_input)
-        date_layout.add_widget(year_layout)
+        year_box.add_widget(self.year_input)
+        date_layout.add_widget(year_box)
 
-        month_layout = BoxLayout(orientation='vertical', spacing=dp(5))
-        month_layout.add_widget(Label(text='月', size_hint=(1, None), height=dp(20)))
+        month_box = BoxLayout(orientation="vertical", spacing=dp(5))
+        month_box.add_widget(Label(text="月", font_size=sp(16), size_hint_y=None, height=dp(24)))
         self.month_spinner = Spinner(
             text=str(now.month),
-            values=[str(m) for m in range(1, 13)],
-            size_hint=(1, None),
-            height=dp(30)
+            values=[str(i) for i in range(1, 13)],
+            size_hint_y=None,
+            height=dp(46),
+            font_size=sp(18)
         )
-        month_layout.add_widget(self.month_spinner)
-        date_layout.add_widget(month_layout)
+        month_box.add_widget(self.month_spinner)
+        date_layout.add_widget(month_box)
 
-        day_layout = BoxLayout(orientation='vertical', spacing=dp(5))
-        day_layout.add_widget(Label(text='日', size_hint=(1, None), height=dp(20)))
+        day_box = BoxLayout(orientation="vertical", spacing=dp(5))
+        day_box.add_widget(Label(text="日", font_size=sp(16), size_hint_y=None, height=dp(24)))
         self.day_spinner = Spinner(
             text=str(now.day),
-            values=[str(d) for d in range(1, 32)],
-            size_hint=(1, None),
-            height=dp(30)
+            values=[str(i) for i in range(1, 32)],
+            size_hint_y=None,
+            height=dp(46),
+            font_size=sp(18)
         )
-        day_layout.add_widget(self.day_spinner)
-        date_layout.add_widget(day_layout)
+        day_box.add_widget(self.day_spinner)
+        date_layout.add_widget(day_box)
 
         form_layout.add_widget(date_layout)
-        layout.add_widget(form_layout)
 
         record_btn = Button(
-            text='记录账单',
-            size_hint=(1, None),
-            height=dp(50),
-            background_color=get_color_from_hex('#27ae60'),
-            background_normal=''
+            text="记录账单",
+            size_hint_y=None,
+            height=dp(52),
+            font_size=sp(20),
+            background_normal="",
+            background_color=(0.16, 0.69, 0.37, 1),
+            color=(1, 1, 1, 1)
         )
         record_btn.bind(on_press=self.record_bill)
-        layout.add_widget(record_btn)
+        form_layout.add_widget(record_btn)
 
-        button_grid = GridLayout(cols=2, spacing=dp(10), size_hint=(1, 0.28))
+        form_card.add_widget(form_layout)
+        content.add_widget(form_card)
+
+        # 功能按钮区
+        button_card = self.make_card()
+        button_grid = GridLayout(
+            cols=2,
+            spacing=dp(10),
+            padding=dp(12),
+            size_hint_y=None
+        )
+        button_grid.bind(minimum_height=button_grid.setter("height"))
+
         buttons = [
-            ('本月统计', '#9b59b6', self.show_monthly_stats),
-            ('历史统计', '#3498db', self.show_history_stats),
-            ('分类设置', '#e67e22', self.show_categories),
-            ('导出数据', '#1abc9c', self.export_data),
-            ('查看记录', '#f39c12', self.show_records),
-            ('删除记录', '#e74c3c', self.delete_records),
-            ('导入数据', '#2ecc71', self.import_data),
+            ("本月统计", (0.62, 0.35, 0.84, 1), self.show_monthly_stats),
+            ("历史统计", (0.20, 0.60, 0.95, 1), self.show_history_stats),
+            ("分类设置", (0.91, 0.52, 0.17, 1), self.show_categories),
+            ("导出数据", (0.10, 0.74, 0.70, 1), self.export_data),
+            ("查看记录", (0.95, 0.63, 0.10, 1), self.show_records),
+            ("删除记录", (0.91, 0.30, 0.24, 1), self.delete_records),
+            ("导入数据", (0.18, 0.80, 0.44, 1), self.import_data_popup),
         ]
+
         for text, color, callback in buttons:
-            btn = Button(text=text, background_color=get_color_from_hex(color), background_normal='')
+            btn = Button(
+                text=text,
+                size_hint_y=None,
+                height=dp(48),
+                font_size=sp(18),
+                background_normal="",
+                background_color=color,
+                color=(1, 1, 1, 1)
+            )
             btn.bind(on_press=callback)
             button_grid.add_widget(btn)
-        layout.add_widget(button_grid)
 
-        expense_layout = BoxLayout(orientation='vertical', size_hint=(1, 0.15), padding=dp(10))
-        with expense_layout.canvas.before:
-            Color(rgba=get_color_from_hex('#ecf0f1')[:3] + [1])
-            self.expense_rect = Rectangle(pos=expense_layout.pos, size=expense_layout.size)
-        expense_layout.bind(pos=self.update_rect, size=self.update_rect)
+        button_card.add_widget(button_grid)
+        content.add_widget(button_card)
+
+        # 本月总支出
+        expense_card = self.make_card()
+        expense_layout = BoxLayout(
+            orientation="vertical",
+            padding=dp(12),
+            spacing=dp(6),
+            size_hint_y=None,
+            height=dp(110)
+        )
 
         expense_layout.add_widget(Label(
-            text='本月总支出:',
-            font_size='16sp',
-            bold=True,
-            color=get_color_from_hex('#2c3e50')
+            text="本月总支出：",
+            font_size=sp(18),
+            size_hint_y=None,
+            height=dp(28),
+            color=(0.12, 0.22, 0.36, 1)
         ))
-        self.monthly_expense_label = Label(text='0.00 元', font_size='24sp', bold=True, color=get_color_from_hex('#e74c3c'))
+
+        self.monthly_expense_label = Label(
+            text="0.00 元",
+            font_size=sp(30),
+            size_hint_y=None,
+            height=dp(50),
+            color=(0.90, 0.30, 0.24, 1)
+        )
         expense_layout.add_widget(self.monthly_expense_label)
-        layout.add_widget(expense_layout)
-        self.add_widget(layout)
 
-        self.load_data()
-        Clock.schedule_once(lambda dt: self.update_monthly_expense(), 0.2)
+        expense_card.add_widget(expense_layout)
+        content.add_widget(expense_card)
 
-    def request_android_permissions(self):
-        try:
-            from android.permissions import request_permissions, Permission
-            request_permissions([
-                Permission.READ_EXTERNAL_STORAGE,
-                Permission.WRITE_EXTERNAL_STORAGE,
-            ])
-        except Exception:
-            pass
+        scroll.add_widget(content)
+        root.add_widget(scroll)
+        self.add_widget(root)
 
-    def get_data_dir(self):
-        data_dir = App.get_running_app().user_data_dir if App.get_running_app() else os.getcwd()
-        os.makedirs(data_dir, exist_ok=True)
-        return data_dir
+    def make_card(self):
+        card = BoxLayout(size_hint_y=None)
+        card.bind(minimum_height=card.setter("height"))
 
-    def get_export_dir(self):
-        if platform == 'android':
-            try:
-                from android.storage import primary_external_storage_path
-                download_dir = os.path.join(primary_external_storage_path(), 'Download')
-                os.makedirs(download_dir, exist_ok=True)
-                return download_dir
-            except Exception:
-                return self.get_data_dir()
-        return os.getcwd()
+        with card.canvas.before:
+            Color(1, 1, 1, 1)
+            card.bg = RoundedRectangle(radius=[dp(16)] * 4, pos=card.pos, size=card.size)
 
-    def get_import_start_dir(self):
-        if platform == 'android':
-            try:
-                from android.storage import primary_external_storage_path
-                return os.path.join(primary_external_storage_path(), 'Download')
-            except Exception:
-                return self.get_data_dir()
-        return os.getcwd()
+        def update_bg(instance, value):
+            instance.bg.pos = instance.pos
+            instance.bg.size = instance.size
 
-    def update_rect(self, instance, value):
-        self.expense_rect.pos = instance.pos
-        self.expense_rect.size = instance.size
+        card.bind(pos=update_bg, size=update_bg)
+        return card
 
+    def make_field_label(self, text):
+        return Label(
+            text=text,
+            font_size=sp(18),
+            size_hint_y=None,
+            height=dp(28),
+            halign="left",
+            valign="middle",
+            text_size=(0, None),
+            color=(0.12, 0.22, 0.36, 1)
+        )
+
+    # =========================
+    # 数据处理
+    # =========================
     def sort_records(self):
         def sort_key(record):
-            date_str = str(record.get('日期', '')).strip()
-            time_str = str(record.get('记录时间', '')).strip()
+            record_time = str(record.get("记录时间", "")).strip()
+            date_str = str(record.get("日期", "")).strip()
+
             try:
-                if time_str:
-                    dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
-                elif date_str:
-                    dt = datetime.strptime(date_str, '%Y-%m-%d')
-                else:
-                    dt = datetime.min
+                if record_time:
+                    return datetime.strptime(record_time, "%Y-%m-%d %H:%M:%S")
             except Exception:
-                try:
-                    dt = datetime.strptime(date_str, '%Y-%m-%d')
-                except Exception:
-                    dt = datetime.min
-            return dt
+                pass
+
+            try:
+                if date_str:
+                    return datetime.strptime(date_str, "%Y-%m-%d")
+            except Exception:
+                pass
+
+            return datetime.min
+
         self.records.sort(key=sort_key, reverse=True)
 
     def load_data(self):
         try:
-            if os.path.exists(self.records_file):
-                with open(self.records_file, 'r', encoding='utf-8') as f:
+            if os.path.exists(self.records_path):
+                with open(self.records_path, "r", encoding="utf-8") as f:
                     self.records = json.load(f)
-            if os.path.exists(self.categories_file):
-                with open(self.categories_file, 'r', encoding='utf-8') as f:
+
+            if os.path.exists(self.categories_path):
+                with open(self.categories_path, "r", encoding="utf-8") as f:
                     loaded_categories = json.load(f)
                     for cat in loaded_categories:
                         if cat not in self.categories:
                             self.categories.append(cat)
+
             self.sort_records()
             self.category_spinner.values = self.categories
             if self.categories:
                 self.category_spinner.text = self.categories[0]
-        except Exception:
+        except Exception as e:
             self.records = []
-            self.category_spinner.values = self.categories
+            self.show_popup("提示", f"读取本地数据失败：\n{str(e)}")
 
     def save_data(self):
         try:
             self.sort_records()
-            with open(self.records_file, 'w', encoding='utf-8') as f:
+            with open(self.records_path, "w", encoding="utf-8") as f:
                 json.dump(self.records, f, ensure_ascii=False, indent=2)
-            with open(self.categories_file, 'w', encoding='utf-8') as f:
+
+            with open(self.categories_path, "w", encoding="utf-8") as f:
                 json.dump(self.categories, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            self.show_popup('错误', f'保存数据失败：\n{str(e)}')
+            self.show_popup("错误", f"保存数据失败：\n{str(e)}")
 
+    def update_monthly_expense(self):
+        current_month = datetime.now().strftime("%Y-%m")
+        total = 0.0
+
+        for record in self.records:
+            try:
+                record_date = datetime.strptime(str(record.get("日期", "")), "%Y-%m-%d")
+                if record_date.strftime("%Y-%m") == current_month:
+                    total += float(record.get("金额", 0))
+            except Exception:
+                continue
+
+        self.monthly_expense_label.text = f"{total:.2f} 元"
+
+    # =========================
+    # 记账
+    # =========================
     def record_bill(self, instance):
-        name = self.name_input.text.strip()
+        note = self.name_input.text.strip()
         category = self.category_spinner.text.strip()
-        amount_str = self.amount_input.text.strip()
+        amount_text = self.amount_input.text.strip()
 
-        if not name:
-            self.show_popup('错误', '请输入消费备注。')
+        if not note:
+            self.show_popup("错误", "请输入消费备注。")
             return
-        if not amount_str:
-            self.show_popup('错误', '请输入金额。')
+
+        if not amount_text:
+            self.show_popup("错误", "请输入金额。")
             return
 
         try:
-            amount = float(amount_str)
+            amount = round(float(amount_text), 2)
             if amount <= 0:
                 raise ValueError
         except Exception:
-            self.show_popup('错误', '请输入有效的正数金额。')
+            self.show_popup("错误", "请输入有效的正数金额。")
             return
 
         try:
             year_text = self.year_input.text.strip()
             if not year_text:
-                self.show_popup('错误', '请输入年份。')
+                self.show_popup("错误", "请输入年份。")
                 return
+
             year = int(year_text)
             month = int(self.month_spinner.text)
             day = int(self.day_spinner.text)
+
             if year < 1900 or year > 9999:
-                self.show_popup('错误', '请输入合理的年份，例如 2026。')
+                self.show_popup("错误", "请输入合理的年份，例如 2026。")
                 return
+
             date_obj = datetime(year, month, day)
-            date_str = date_obj.strftime('%Y-%m-%d')
+            date_str = date_obj.strftime("%Y-%m-%d")
         except Exception:
-            self.show_popup('错误', '日期无效，请检查年月日。')
+            self.show_popup("错误", "日期无效，请检查年月日。")
             return
 
         record = {
-            '姓名/备注': name,
-            '分类': category,
-            '金额': amount,
-            '日期': date_str,
-            '记录时间': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            "姓名/备注": note,
+            "分类": category,
+            "金额": amount,
+            "日期": date_str,
+            "记录时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+
         self.records.append(record)
-        self.sort_records()
         self.save_data()
-        self.name_input.text = ''
-        self.amount_input.text = ''
         self.update_monthly_expense()
-        self.show_popup('成功', f'已记录：\n{name}\n{category} - {amount:.2f}元')
 
-    def update_monthly_expense(self):
-        current_month = datetime.now().strftime('%Y-%m')
-        total = 0.0
-        for record in self.records:
-            try:
-                record_date = datetime.strptime(str(record.get('日期', '')), '%Y-%m-%d')
-                amount = float(record.get('金额', 0))
-                if record_date.strftime('%Y-%m') == current_month:
-                    total += amount
-            except Exception:
-                continue
-        self.monthly_expense_label.text = f'{total:.2f} 元'
+        self.name_input.text = ""
+        self.amount_input.text = ""
 
+        self.show_popup("成功", f"已记录：\n{note}\n{category} - {amount:.2f}元")
+
+    # =========================
+    # 统计
+    # =========================
     def show_monthly_stats(self, instance):
-        self.show_stats_for_month(datetime.now().strftime('%Y-%m'))
+        current_month = datetime.now().strftime("%Y-%m")
+        self.show_stats_for_month(current_month)
 
     def show_history_stats(self, instance):
         months = set()
         for record in self.records:
             try:
-                date_obj = datetime.strptime(str(record.get('日期', '')), '%Y-%m-%d')
-                months.add(date_obj.strftime('%Y-%m'))
+                date_obj = datetime.strptime(str(record.get("日期", "")), "%Y-%m-%d")
+                months.add(date_obj.strftime("%Y-%m"))
             except Exception:
                 continue
+
         if not months:
-            self.show_popup('提示', '暂无历史记录。')
+            self.show_popup("提示", "暂无历史记录。")
             return
+
         month_list = sorted(list(months), reverse=True)
-        content = BoxLayout(orientation='vertical', spacing=dp(10))
-        month_spinner = Spinner(text=month_list[0], values=month_list, size_hint_y=None, height=dp(50))
-        content.add_widget(month_spinner)
-        open_btn = Button(text='查看统计', size_hint_y=None, height=dp(45))
-        close_btn = Button(text='关闭', size_hint_y=None, height=dp(40))
-        popup = Popup(title='历史统计', content=content, size_hint=(0.8, 0.5))
 
-        def open_stats(btn):
+        content = BoxLayout(orientation="vertical", spacing=dp(12), padding=dp(12))
+        spinner = Spinner(
+            text=month_list[0],
+            values=month_list,
+            size_hint_y=None,
+            height=dp(48),
+            font_size=sp(18)
+        )
+        content.add_widget(spinner)
+
+        btn_view = Button(text="查看统计", size_hint_y=None, height=dp(46), font_size=sp(18))
+        btn_close = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
+
+        popup = Popup(title="历史统计", content=content, size_hint=(0.88, 0.42), auto_dismiss=False)
+
+        def do_view(btn):
             popup.dismiss()
-            self.show_stats_for_month(month_spinner.text)
+            self.show_stats_for_month(spinner.text)
 
-        open_btn.bind(on_press=open_stats)
-        close_btn.bind(on_press=popup.dismiss)
-        content.add_widget(open_btn)
-        content.add_widget(close_btn)
+        btn_view.bind(on_press=do_view)
+        btn_close.bind(on_press=popup.dismiss)
+
+        content.add_widget(btn_view)
+        content.add_widget(btn_close)
         popup.open()
 
     def show_stats_for_month(self, month_str):
         month_records = []
         for record in self.records:
             try:
-                date_obj = datetime.strptime(str(record.get('日期', '')), '%Y-%m-%d')
-                if date_obj.strftime('%Y-%m') == month_str:
+                date_obj = datetime.strptime(str(record.get("日期", "")), "%Y-%m-%d")
+                if date_obj.strftime("%Y-%m") == month_str:
                     month_records.append(record)
             except Exception:
                 continue
+
         if not month_records:
-            self.show_popup('提示', f'{month_str} 没有记录。')
+            self.show_popup("提示", f"{month_str} 没有记录。")
             return
+
         total = 0.0
         category_stats = {}
+
         for record in month_records:
             try:
-                amount = float(record.get('金额', 0))
-                category = str(record.get('分类', '未分类'))
+                amount = float(record.get("金额", 0))
+                category = str(record.get("分类", "未分类"))
                 total += amount
-                category_stats[category] = category_stats.get(category, 0) + amount
+                category_stats[category] = category_stats.get(category, 0.0) + amount
             except Exception:
                 continue
-        lines = [f'{month_str} 统计结果', '', f'总支出：{total:.2f} 元', '', '分类明细：']
-        for category, amount in sorted(category_stats.items(), key=lambda x: x[1], reverse=True):
-            lines.append(f'{category}：{amount:.2f} 元')
-        self.show_popup('统计结果', '\n'.join(lines))
 
+        lines = [f"{month_str} 统计结果", "", f"总支出：{total:.2f} 元", "", "分类明细："]
+        for category, amount in sorted(category_stats.items(), key=lambda x: x[1], reverse=True):
+            lines.append(f"{category}：{amount:.2f} 元")
+
+        self.show_popup("统计结果", "\n".join(lines))
+
+    # =========================
+    # 分类设置
+    # =========================
     def show_categories(self, instance):
-        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(10))
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
+
         scroll = ScrollView(size_hint=(1, 1))
         grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-        grid.bind(minimum_height=grid.setter('height'))
+        grid.bind(minimum_height=grid.setter("height"))
+
         for category in self.categories:
-            row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
-            row.add_widget(Label(text=category))
-            delete_btn = Button(text='删除', size_hint=(0.25, 1), background_color=get_color_from_hex('#e74c3c'), background_normal='')
+            row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+            row.add_widget(Label(text=category, font_size=sp(17), halign="left", valign="middle"))
+
+            delete_btn = Button(
+                text="删除",
+                size_hint=(0.28, 1),
+                font_size=sp(16),
+                background_normal="",
+                background_color=(0.91, 0.30, 0.24, 1),
+                color=(1, 1, 1, 1)
+            )
             delete_btn.bind(on_press=lambda btn, cat=category: self.delete_category(cat))
             row.add_widget(delete_btn)
+
             grid.add_widget(row)
+
         scroll.add_widget(grid)
         content.add_widget(scroll)
-        self.new_category_input = TextInput(hint_text='输入新分类', multiline=False, size_hint_y=None, height=dp(40))
+
+        self.new_category_input = TextInput(
+            hint_text="输入新分类",
+            multiline=False,
+            size_hint_y=None,
+            height=dp(46),
+            font_size=sp(18),
+            background_normal="",
+            background_active="",
+            background_color=(0.96, 0.96, 0.96, 1),
+            foreground_color=(0, 0, 0, 1),
+            cursor_color=(0, 0, 0, 1),
+            padding=[dp(10), dp(10), dp(10), dp(10)]
+        )
         content.add_widget(self.new_category_input)
-        add_btn = Button(text='添加分类', size_hint_y=None, height=dp(45), background_color=get_color_from_hex('#27ae60'), background_normal='')
+
+        add_btn = Button(
+            text="添加分类",
+            size_hint_y=None,
+            height=dp(46),
+            font_size=sp(18),
+            background_normal="",
+            background_color=(0.16, 0.69, 0.37, 1),
+            color=(1, 1, 1, 1)
+        )
         add_btn.bind(on_press=self.add_category)
         content.add_widget(add_btn)
-        close_btn = Button(text='关闭', size_hint_y=None, height=dp(40))
+
+        close_btn = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
         content.add_widget(close_btn)
-        popup = Popup(title='分类设置', content=content, size_hint=(0.85, 0.85))
+
+        popup = Popup(title="分类设置", content=content, size_hint=(0.9, 0.9), auto_dismiss=False)
         close_btn.bind(on_press=popup.dismiss)
         popup.open()
 
     def add_category(self, instance):
         new_category = self.new_category_input.text.strip()
         if not new_category:
-            self.show_popup('提示', '请输入分类名称。')
+            self.show_popup("提示", "请输入分类名称。")
             return
+
         if new_category in self.categories:
-            self.show_popup('提示', '该分类已存在。')
+            self.show_popup("提示", "该分类已存在。")
             return
+
         self.categories.append(new_category)
         self.category_spinner.values = self.categories
         self.save_data()
-        self.show_popup('成功', f'已添加分类：{new_category}')
-        self.new_category_input.text = ''
+        self.new_category_input.text = ""
+        self.show_popup("成功", f"已添加分类：{new_category}")
 
     def delete_category(self, category):
         if category not in self.categories:
             return
+
         if len(self.categories) <= 1:
-            self.show_popup('提示', '至少保留一个分类。')
+            self.show_popup("提示", "至少保留一个分类。")
             return
+
         self.categories.remove(category)
         self.category_spinner.values = self.categories
-        if self.category_spinner.text == category:
+        if self.category_spinner.text == category and self.categories:
             self.category_spinner.text = self.categories[0]
-        self.save_data()
-        self.show_popup('成功', f'已删除分类：{category}')
 
+        self.save_data()
+        self.show_popup("成功", f"已删除分类：{category}")
+
+    # =========================
+    # 查看记录
+    # =========================
     def show_records(self, instance):
         if not self.records:
-            self.show_popup('提示', '暂无记录。')
+            self.show_popup("提示", "暂无记录。")
             return
+
         self.sort_records()
-        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(10))
+
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
         scroll = ScrollView(size_hint=(1, 1))
-        grid = GridLayout(cols=1, spacing=dp(10), size_hint_y=None)
-        grid.bind(minimum_height=grid.setter('height'))
-        for record in self.records[:50]:
-            note = str(record.get('姓名/备注', ''))
-            category = str(record.get('分类', ''))
-            amount = float(record.get('金额', 0))
-            date_str = str(record.get('日期', ''))
-            text = f'{date_str}  {category}\n{amount:.2f}元  {note}'
-            row = Label(text=text, size_hint_y=None, height=dp(60), halign='left', valign='middle', text_size=(dp(280), None))
+        grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+
+        display_records = self.records[:50]
+
+        for record in display_records:
+            note = str(record.get("姓名/备注", ""))
+            category = str(record.get("分类", ""))
+            amount = float(record.get("金额", 0))
+            date_str = str(record.get("日期", ""))
+
+            text = f"{date_str}  {category}\n{amount:.2f}元  {note}"
+            row = Label(
+                text=text,
+                font_size=sp(16),
+                size_hint_y=None,
+                height=dp(62),
+                halign="left",
+                valign="middle"
+            )
+            row.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(10), None)))
             grid.add_widget(row)
+
         scroll.add_widget(grid)
         content.add_widget(scroll)
-        close_btn = Button(text='关闭', size_hint_y=None, height=dp(40))
+
+        close_btn = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
         content.add_widget(close_btn)
-        popup = Popup(title='查看记录（最近50条）', content=content, size_hint=(0.9, 0.9))
+
+        popup = Popup(
+            title="查看记录（最近50条）",
+            content=content,
+            size_hint=(0.92, 0.9),
+            auto_dismiss=False
+        )
         close_btn.bind(on_press=popup.dismiss)
         popup.open()
 
+    # =========================
+    # 删除记录
+    # =========================
     def delete_records(self, instance):
         if not self.records:
-            self.show_popup('提示', '暂无记录可删除。')
+            self.show_popup("提示", "暂无记录可删除。")
             return
+
         self.sort_records()
-        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(10))
+
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
         scroll = ScrollView(size_hint=(1, 1))
-        grid = GridLayout(cols=1, spacing=dp(10), size_hint_y=None)
-        grid.bind(minimum_height=grid.setter('height'))
-        for real_index, record in list(enumerate(self.records[:20])):
-            item_layout = BoxLayout(size_hint_y=None, height=dp(65), spacing=dp(8))
+        grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+
+        display_records = list(enumerate(self.records[:20]))
+
+        for real_index, record in display_records:
+            row = BoxLayout(size_hint_y=None, height=dp(68), spacing=dp(8))
+
             record_text = (
                 f"{record.get('日期', '')} {record.get('分类', '')}\n"
-                f"{safe_float(record.get('金额', 0)):.2f}元 {str(record.get('姓名/备注', ''))[:12]}"
+                f"{float(record.get('金额', 0)):.2f}元 {str(record.get('姓名/备注', ''))[:14]}"
             )
-            info_label = Label(text=record_text, size_hint=(0.72, 1), halign='left', valign='middle', text_size=(dp(190), None))
-            item_layout.add_widget(info_label)
-            delete_btn = Button(text='删除', size_hint=(0.28, 1), background_color=get_color_from_hex('#e74c3c'), background_normal='')
+
+            info_label = Label(
+                text=record_text,
+                font_size=sp(15),
+                size_hint=(0.72, 1),
+                halign="left",
+                valign="middle"
+            )
+            info_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(6), None)))
+            row.add_widget(info_label)
+
+            delete_btn = Button(
+                text="删除",
+                font_size=sp(16),
+                size_hint=(0.28, 1),
+                background_normal="",
+                background_color=(0.91, 0.30, 0.24, 1),
+                color=(1, 1, 1, 1)
+            )
             delete_btn.bind(on_press=lambda btn, idx=real_index: self.delete_single_record(idx))
-            item_layout.add_widget(delete_btn)
-            grid.add_widget(item_layout)
+            row.add_widget(delete_btn)
+
+            grid.add_widget(row)
+
         scroll.add_widget(grid)
         content.add_widget(scroll)
-        clear_all_btn = Button(text='清空所有记录', size_hint_y=None, height=dp(40), background_color=get_color_from_hex('#c0392b'), background_normal='')
-        clear_all_btn.bind(on_press=self.clear_all_records)
-        content.add_widget(clear_all_btn)
-        close_btn = Button(text='关闭', size_hint_y=None, height=dp(40))
+
+        clear_btn = Button(
+            text="清空所有记录",
+            size_hint_y=None,
+            height=dp(44),
+            font_size=sp(17),
+            background_normal="",
+            background_color=(0.75, 0.22, 0.19, 1),
+            color=(1, 1, 1, 1)
+        )
+        clear_btn.bind(on_press=self.clear_all_records)
+        content.add_widget(clear_btn)
+
+        close_btn = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
         content.add_widget(close_btn)
-        popup = Popup(title='删除记录（最近20条）', content=content, size_hint=(0.9, 0.9))
+
+        popup = Popup(
+            title="删除记录（最近20条）",
+            content=content,
+            size_hint=(0.92, 0.9),
+            auto_dismiss=False
+        )
         close_btn.bind(on_press=popup.dismiss)
         popup.open()
 
@@ -510,157 +777,198 @@ class MainScreen(Screen):
             del self.records[index]
             self.save_data()
             self.update_monthly_expense()
-            self.show_popup('成功', '记录已删除。')
+            self.show_popup("成功", "记录已删除。")
 
     def clear_all_records(self, instance):
-        def confirm_clear(btn):
+        def do_clear(btn):
             self.records = []
             self.save_data()
             self.update_monthly_expense()
-            self.show_popup('成功', '所有记录已清空。')
-        self.show_confirm_popup('确认清空', '确定要清空所有记录吗？此操作不可撤销。', confirm_clear)
+            self.show_popup("成功", "所有记录已清空。")
 
+        self.show_confirm_popup("确认清空", "确定要清空所有记录吗？此操作不可撤销。", do_clear)
+
+    # =========================
+    # 导出
+    # =========================
     def export_data(self, instance):
         if not self.records:
-            self.show_popup('提示', '暂无记录可导出。')
+            self.show_popup("提示", "暂无记录可导出。")
             return
-        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(10))
-        options = [
-            ('导出为Excel', self.export_to_excel),
-            ('导出为CSV', self.export_to_csv),
-            ('导出为JSON', self.export_to_json)
-        ]
-        for text, callback in options:
-            btn = Button(text=text, size_hint_y=None, height=dp(50))
-            btn.bind(on_press=callback)
-            content.add_widget(btn)
-        hint = Label(text=f'默认导出目录：\n{self.get_export_dir()}', size_hint_y=None, height=dp(70), halign='center', valign='middle')
-        hint.bind(size=lambda inst, val: setattr(inst, 'text_size', val))
-        content.add_widget(hint)
-        close_btn = Button(text='关闭', size_hint_y=None, height=dp(40))
-        content.add_widget(close_btn)
-        popup = Popup(title='导出数据', content=content, size_hint=(0.88, 0.72))
-        close_btn.bind(on_press=popup.dismiss)
+
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
+
+        btn_xlsx = Button(text="导出为 Excel", size_hint_y=None, height=dp(48), font_size=sp(18))
+        btn_csv = Button(text="导出为 CSV", size_hint_y=None, height=dp(48), font_size=sp(18))
+        btn_json = Button(text="导出为 JSON", size_hint_y=None, height=dp(48), font_size=sp(18))
+        btn_close = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
+
+        popup = Popup(title="导出数据", content=content, size_hint=(0.86, 0.48), auto_dismiss=False)
+
+        btn_xlsx.bind(on_press=lambda btn: self.export_to_excel(popup))
+        btn_csv.bind(on_press=lambda btn: self.export_to_csv(popup))
+        btn_json.bind(on_press=lambda btn: self.export_to_json(popup))
+        btn_close.bind(on_press=popup.dismiss)
+
+        content.add_widget(btn_xlsx)
+        content.add_widget(btn_csv)
+        content.add_widget(btn_json)
+        content.add_widget(btn_close)
+
         popup.open()
 
-    def export_to_excel(self, instance):
+    def export_to_excel(self, popup=None):
         try:
             self.sort_records()
+            export_dir = self.get_export_dir()
+            filename = f"记账记录_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            file_path = os.path.join(export_dir, filename)
+
             wb = Workbook()
             ws = wb.active
-            ws.title = '记账记录'
-            headers = ['姓名/备注', '分类', '金额', '日期', '记录时间']
-            ws.append(headers)
+            ws.title = "记账记录"
+            ws.append(["姓名/备注", "分类", "金额", "日期", "记录时间"])
+
             for record in self.records:
                 ws.append([
-                    record.get('姓名/备注', ''),
-                    record.get('分类', ''),
-                    safe_float(record.get('金额', 0)),
-                    record.get('日期', ''),
-                    record.get('记录时间', ''),
+                    record.get("姓名/备注", ""),
+                    record.get("分类", ""),
+                    record.get("金额", ""),
+                    record.get("日期", ""),
+                    record.get("记录时间", "")
                 ])
-            filename = f'记账记录_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
-            path = os.path.join(self.get_export_dir(), filename)
-            wb.save(path)
-            self.show_popup('成功', f'数据已导出为：\n{path}')
-        except Exception as e:
-            self.show_popup('错误', f'导出失败：\n{str(e)}')
 
-    def export_to_csv(self, instance):
+            wb.save(file_path)
+
+            if popup:
+                popup.dismiss()
+            self.show_popup("成功", f"数据已导出为：\n{file_path}")
+        except Exception as e:
+            self.show_popup("错误", f"导出失败：\n{str(e)}")
+
+    def export_to_csv(self, popup=None):
         try:
             self.sort_records()
-            filename = f'记账记录_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
-            path = os.path.join(self.get_export_dir(), filename)
-            headers = ['姓名/备注', '分类', '金额', '日期', '记录时间']
-            with open(path, 'w', newline='', encoding='utf-8-sig') as f:
-                writer = csv.DictWriter(f, fieldnames=headers)
+            export_dir = self.get_export_dir()
+            filename = f"记账记录_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            file_path = os.path.join(export_dir, filename)
+
+            fieldnames = ["姓名/备注", "分类", "金额", "日期", "记录时间"]
+            with open(file_path, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 for record in self.records:
-                    writer.writerow({key: record.get(key, '') for key in headers})
-            self.show_popup('成功', f'数据已导出为：\n{path}')
-        except Exception as e:
-            self.show_popup('错误', f'导出失败：\n{str(e)}')
+                    writer.writerow({
+                        "姓名/备注": record.get("姓名/备注", ""),
+                        "分类": record.get("分类", ""),
+                        "金额": record.get("金额", ""),
+                        "日期": record.get("日期", ""),
+                        "记录时间": record.get("记录时间", "")
+                    })
 
-    def export_to_json(self, instance):
+            if popup:
+                popup.dismiss()
+            self.show_popup("成功", f"数据已导出为：\n{file_path}")
+        except Exception as e:
+            self.show_popup("错误", f"导出失败：\n{str(e)}")
+
+    def export_to_json(self, popup=None):
         try:
             self.sort_records()
-            filename = f'记账记录_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
-            path = os.path.join(self.get_export_dir(), filename)
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(self.records, f, ensure_ascii=False, indent=2)
-            self.show_popup('成功', f'数据已导出为：\n{path}')
-        except Exception as e:
-            self.show_popup('错误', f'导出失败：\n{str(e)}')
+            export_dir = self.get_export_dir()
+            filename = f"记账记录_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            file_path = os.path.join(export_dir, filename)
 
-    def import_data(self, instance):
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(self.records, f, ensure_ascii=False, indent=2)
+
+            if popup:
+                popup.dismiss()
+            self.show_popup("成功", f"数据已导出为：\n{file_path}")
+        except Exception as e:
+            self.show_popup("错误", f"导出失败：\n{str(e)}")
+
+    # =========================
+    # 导入
+    # =========================
+    def import_data_popup(self, instance):
         chooser = FileChooserListView(
-            path=self.get_import_start_dir(),
-            filters=['*.json', '*.csv', '*.xlsx'],
-            dirselect=False
+            path=self.get_default_import_dir(),
+            filters=["*.json", "*.csv", "*.xlsx"],
+            size_hint=(1, 1)
         )
-        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(10))
+
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
         content.add_widget(chooser)
-        btn_layout = BoxLayout(size_hint_y=None, height=dp(45), spacing=dp(10))
-        ok_btn = Button(text='导入')
-        cancel_btn = Button(text='取消')
-        btn_layout.add_widget(ok_btn)
-        btn_layout.add_widget(cancel_btn)
-        content.add_widget(btn_layout)
-        popup = Popup(title='选择要导入的数据文件', content=content, size_hint=(0.95, 0.9), auto_dismiss=False)
+
+        btn_box = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(10))
+        btn_import = Button(text="导入", font_size=sp(17))
+        btn_cancel = Button(text="取消", font_size=sp(17))
+        btn_box.add_widget(btn_import)
+        btn_box.add_widget(btn_cancel)
+        content.add_widget(btn_box)
+
+        popup = Popup(title="选择要导入的数据文件", content=content, size_hint=(0.94, 0.92), auto_dismiss=False)
 
         def do_import(btn):
-            selection = chooser.selection
-            if not selection:
-                self.show_popup('提示', '请先选择一个文件。')
+            if not chooser.selection:
+                self.show_popup("提示", "请先选择一个文件。")
                 return
+            file_path = chooser.selection[0]
             popup.dismiss()
-            self.import_from_path(selection[0])
+            self.import_file(file_path)
 
-        ok_btn.bind(on_press=do_import)
-        cancel_btn.bind(on_press=popup.dismiss)
+        btn_import.bind(on_press=do_import)
+        btn_cancel.bind(on_press=popup.dismiss)
+
         popup.open()
 
-    def import_from_path(self, file_path):
+    def import_file(self, file_path):
         try:
             imported_records = []
-            if file_path.lower().endswith('.json'):
-                with open(file_path, 'r', encoding='utf-8') as f:
+
+            if file_path.lower().endswith(".json"):
+                with open(file_path, "r", encoding="utf-8") as f:
                     imported_records = json.load(f)
-            elif file_path.lower().endswith('.csv'):
-                with open(file_path, 'r', encoding='utf-8-sig', newline='') as f:
+
+            elif file_path.lower().endswith(".csv"):
+                with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
                     reader = csv.DictReader(f)
                     imported_records = list(reader)
-            elif file_path.lower().endswith('.xlsx'):
+
+            elif file_path.lower().endswith(".xlsx"):
                 wb = load_workbook(file_path, data_only=True)
                 ws = wb.active
                 rows = list(ws.iter_rows(values_only=True))
                 if not rows:
-                    imported_records = []
-                else:
-                    headers = [str(x).strip() if x is not None else '' for x in rows[0]]
-                    for row in rows[1:]:
-                        record = {}
-                        for idx, header in enumerate(headers):
-                            if header:
-                                value = row[idx] if idx < len(row) else ''
-                                record[header] = '' if value is None else value
-                        imported_records.append(record)
+                    self.show_popup("导入失败", "Excel 文件为空。")
+                    return
+
+                headers = [str(h).strip() if h is not None else "" for h in rows[0]]
+                for row in rows[1:]:
+                    item = {}
+                    for i, header in enumerate(headers):
+                        if header:
+                            item[header] = row[i] if i < len(row) else ""
+                    imported_records.append(item)
+
             else:
-                self.show_popup('错误', '不支持的文件格式。')
+                self.show_popup("错误", "不支持的文件格式。")
                 return
 
             if not isinstance(imported_records, list):
-                self.show_popup('导入失败', '文件内容格式不正确。')
+                self.show_popup("导入失败", "文件内容格式不正确。")
                 return
 
             existing_keys = set()
             for record in self.records:
                 try:
-                    note = str(record.get('姓名/备注', '')).strip()
-                    category = str(record.get('分类', '')).strip()
-                    amount = round(float(record.get('金额', 0)), 2)
-                    date_str = str(record.get('日期', '')).strip()
-                    existing_keys.add((note, category, amount, date_str))
+                    note = str(record.get("姓名/备注", "")).strip()
+                    category = str(record.get("分类", "")).strip()
+                    amount = round(float(record.get("金额", 0)), 2)
+                    date_str = str(record.get("日期", "")).strip()
+                    key = (note, category, amount, date_str)
+                    existing_keys.add(key)
                 except Exception:
                     continue
 
@@ -671,107 +979,140 @@ class MainScreen(Screen):
             for record in imported_records:
                 if not isinstance(record, dict):
                     continue
-                note = record.get('姓名/备注', record.get('备注', ''))
-                category = record.get('分类', '')
-                amount = record.get('金额', '')
-                date_str = record.get('日期', '')
-                record_time = record.get('记录时间', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                if str(note).strip() == '' or str(category).strip() == '' or str(date_str).strip() == '':
+
+                note = record.get("姓名/备注", record.get("备注", ""))
+                category = record.get("分类", "")
+                amount = record.get("金额", "")
+                date_str = record.get("日期", "")
+                record_time = record.get("记录时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+                if str(note).strip() == "" or str(category).strip() == "" or str(date_str).strip() == "":
                     continue
+
                 try:
                     amount = round(float(amount), 2)
                     if amount <= 0:
                         continue
                 except Exception:
                     continue
+
                 try:
                     if isinstance(date_str, datetime):
-                        date_str = date_str.strftime('%Y-%m-%d')
+                        date_str = date_str.strftime("%Y-%m-%d")
                     else:
-                        date_str = datetime.strptime(str(date_str)[:10], '%Y-%m-%d').strftime('%Y-%m-%d')
+                        date_str = datetime.strptime(str(date_str)[:10], "%Y-%m-%d").strftime("%Y-%m-%d")
                 except Exception:
-                    try:
-                        date_str = datetime.fromisoformat(str(date_str)).strftime('%Y-%m-%d')
-                    except Exception:
-                        continue
+                    continue
+
                 clean_note = str(note).strip()
                 clean_category = str(category).strip()
                 key = (clean_note, clean_category, amount, date_str)
+
                 if key in existing_keys:
                     duplicate_count += 1
                     continue
+
                 clean_record = {
-                    '姓名/备注': clean_note,
-                    '分类': clean_category,
-                    '金额': amount,
-                    '日期': date_str,
-                    '记录时间': str(record_time)
+                    "姓名/备注": clean_note,
+                    "分类": clean_category,
+                    "金额": amount,
+                    "日期": date_str,
+                    "记录时间": str(record_time)
                 }
+
                 valid_records.append(clean_record)
                 new_categories.add(clean_category)
                 existing_keys.add(key)
 
             if not valid_records and duplicate_count > 0:
-                self.show_popup('导入完成', f'没有新增记录。\n检测到 {duplicate_count} 条重复记录，已自动跳过。')
+                self.show_popup("导入完成", f"没有新增记录。\n检测到 {duplicate_count} 条重复记录，已自动跳过。")
                 return
+
             if not valid_records:
-                self.show_popup('导入失败', '文件中没有找到可导入的有效记录。')
+                self.show_popup("导入失败", "文件中没有找到可导入的有效记录。")
                 return
 
             self.records.extend(valid_records)
             self.sort_records()
+
             for cat in sorted(new_categories):
                 if cat and cat not in self.categories:
                     self.categories.append(cat)
+
             self.category_spinner.values = self.categories
             if self.category_spinner.text not in self.categories and self.categories:
                 self.category_spinner.text = self.categories[0]
+
             self.save_data()
             self.update_monthly_expense()
-            self.show_popup('导入成功', f'成功导入 {len(valid_records)} 条记录。\n自动跳过 {duplicate_count} 条重复记录。')
-        except Exception as e:
-            self.show_popup('导入失败', f'发生错误：\n{str(e)}')
 
+            self.show_popup(
+                "导入成功",
+                f"成功导入 {len(valid_records)} 条记录。\n自动跳过 {duplicate_count} 条重复记录。"
+            )
+
+        except Exception as e:
+            self.show_popup("导入失败", f"发生错误：\n{str(e)}")
+
+    # =========================
+    # 通用弹窗
+    # =========================
     def show_popup(self, title, message):
-        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(10))
-        msg_label = Label(text=message, halign='center', valign='middle')
-        msg_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
-        content.add_widget(msg_label)
-        ok_btn = Button(text='确定', size_hint_y=None, height=dp(40))
-        content.add_widget(ok_btn)
-        popup = Popup(title=title, content=content, size_hint=(0.82, 0.5), auto_dismiss=False)
-        ok_btn.bind(on_press=popup.dismiss)
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
+
+        msg = Label(
+            text=message,
+            font_size=sp(17),
+            halign="center",
+            valign="middle"
+        )
+        msg.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(8), None)))
+        content.add_widget(msg)
+
+        btn = Button(text="确定", size_hint_y=None, height=dp(42), font_size=sp(17))
+        content.add_widget(btn)
+
+        popup = Popup(title=title, content=content, size_hint=(0.86, 0.42), auto_dismiss=False)
+        btn.bind(on_press=popup.dismiss)
         popup.open()
 
     def show_confirm_popup(self, title, message, confirm_callback):
-        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(10))
-        msg_label = Label(text=message, halign='center', valign='middle')
-        msg_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
-        content.add_widget(msg_label)
-        btn_layout = BoxLayout(spacing=dp(10), size_hint_y=None, height=dp(40))
-        confirm_btn = Button(text='确定')
-        cancel_btn = Button(text='取消')
-        btn_layout.add_widget(confirm_btn)
-        btn_layout.add_widget(cancel_btn)
-        content.add_widget(btn_layout)
-        popup = Popup(title=title, content=content, size_hint=(0.82, 0.5), auto_dismiss=False)
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
 
-        def on_confirm(btn):
+        msg = Label(
+            text=message,
+            font_size=sp(17),
+            halign="center",
+            valign="middle"
+        )
+        msg.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(8), None)))
+        content.add_widget(msg)
+
+        btn_box = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(10))
+        btn_ok = Button(text="确定", font_size=sp(17))
+        btn_cancel = Button(text="取消", font_size=sp(17))
+        btn_box.add_widget(btn_ok)
+        btn_box.add_widget(btn_cancel)
+        content.add_widget(btn_box)
+
+        popup = Popup(title=title, content=content, size_hint=(0.86, 0.42), auto_dismiss=False)
+
+        def do_confirm(btn):
             popup.dismiss()
             confirm_callback(btn)
 
-        confirm_btn.bind(on_press=on_confirm)
-        cancel_btn.bind(on_press=popup.dismiss)
+        btn_ok.bind(on_press=do_confirm)
+        btn_cancel.bind(on_press=popup.dismiss)
         popup.open()
 
 
 class AccountingApp(App):
     def build(self):
-        self.title = '个人记账'
+        self.title = "个人记账"
         sm = ScreenManager()
         sm.add_widget(MainScreen())
         return sm
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     AccountingApp().run()
