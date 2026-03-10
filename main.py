@@ -47,8 +47,7 @@ from kivy.clock import Clock
 
 from openpyxl import Workbook, load_workbook
 
-
-# 桌面端可以设置一个最小窗口，安卓端不会受影响
+# 桌面端设置最小窗口，安卓端不受影响
 if platform in ("win", "linux", "macosx"):
     Window.minimum_width = 380
     Window.minimum_height = 700
@@ -328,18 +327,18 @@ class MainScreen(Screen):
         card.bind(pos=update_bg, size=update_bg)
         return card
 
-def make_field_label(self, text):
-    label = Label(
-        text=text,
-        font_size=sp(18),
-        size_hint_y=None,
-        height=dp(32),
-        halign="left",
-        valign="middle",
-        color=(0.12, 0.22, 0.36, 1)
-    )
-    label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
-    return label
+    def make_field_label(self, text):
+        label = Label(
+            text=text,
+            font_size=sp(18),
+            size_hint_y=None,
+            height=dp(32),
+            halign="left",
+            valign="middle",
+            color=(0.12, 0.22, 0.36, 1)
+        )
+        label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        return label
 
     # =========================
     # 数据处理
