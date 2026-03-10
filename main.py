@@ -3,17 +3,6 @@ from kivy.config import Config
 # UI config before importing most Kivy widgets
 Config.set('graphics', 'width', '360')
 Config.set('graphics', 'height', '640')
-Config.set(
-    'kivy',
-    'default_font',
-    [
-        'Microsoft YaHei',
-        r'C:\Windows\Fonts\msyh.ttc',
-        r'C:\Windows\Fonts\msyh.ttc',
-        r'C:\Windows\Fonts\msyh.ttc',
-        r'C:\Windows\Fonts\msyh.ttc'
-    ]
-)
 
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
