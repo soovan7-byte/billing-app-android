@@ -328,17 +328,18 @@ class MainScreen(Screen):
         card.bind(pos=update_bg, size=update_bg)
         return card
 
-    def make_field_label(self, text):
-        return Label(
-            text=text,
-            font_size=sp(18),
-            size_hint_y=None,
-            height=dp(28),
-            halign="left",
-            valign="middle",
-            text_size=(0, None),
-            color=(0.12, 0.22, 0.36, 1)
-        )
+def make_field_label(self, text):
+    label = Label(
+        text=text,
+        font_size=sp(18),
+        size_hint_y=None,
+        height=dp(32),
+        halign="left",
+        valign="middle",
+        color=(0.12, 0.22, 0.36, 1)
+    )
+    label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+    return label
 
     # =========================
     # 数据处理
