@@ -150,7 +150,7 @@ class MainScreen(Screen):
             height=height,
             font_size=font_size,
             background_normal="",
-            background_color=(0.20, 0.60, 0.35, 1),
+            background_color=(0.18, 0.63, 0.35, 1),
             color=(1, 1, 1, 1)
         )
         return btn
@@ -215,7 +215,8 @@ class MainScreen(Screen):
             height=height,
             font_size=font_size,
             background_normal="",
-            background_color=(0, 0, 0, 0)  # 透明背景，用 canvas 绘制
+            background_color=(0.10, 0.17, 0.24, 1),
+            color=(1, 1, 1, 1)
         )
         # 添加圆角背景
         with sp.canvas.before:
@@ -369,13 +370,13 @@ class MainScreen(Screen):
         button_grid.bind(minimum_height=button_grid.setter("height"))
 
         buttons = [
-            ("本月统计", (0.35, 0.55, 0.75, 1), self.show_monthly_stats),
-            ("历史统计", (0.35, 0.55, 0.75, 1), self.show_history_stats),
-            ("分类设置", (0.35, 0.55, 0.75, 1), self.show_categories),
-            ("导出数据", (0.35, 0.55, 0.75, 1), self.export_data),
-            ("查看记录", (0.35, 0.55, 0.75, 1), self.show_records),
+            ("本月统计", (0.35, 0.56, 0.75, 1), self.show_monthly_stats),
+            ("历史统计", (0.35, 0.56, 0.75, 1), self.show_history_stats),
+            ("分类设置", (0.35, 0.56, 0.75, 1), self.show_categories),
+            ("导出数据", (0.35, 0.56, 0.75, 1), self.export_data),
+            ("查看记录", (0.35, 0.56, 0.75, 1), self.show_records),
             ("删除记录", (0.80, 0.30, 0.25, 1), self.delete_records),
-            ("导入数据", (0.35, 0.55, 0.75, 1), self.import_data_popup),
+            ("导入数据", (0.35, 0.56, 0.75, 1), self.import_data_popup),
         ]
 
         for text, color, callback in buttons:
