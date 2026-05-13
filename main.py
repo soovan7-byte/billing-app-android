@@ -150,7 +150,7 @@ class MainScreen(Screen):
             height=height,
             font_size=font_size,
             background_normal="",
-            background_color=(0.16, 0.69, 0.37, 1),
+            background_color=(0.20, 0.60, 0.35, 1),
             color=(1, 1, 1, 1)
         )
         return btn
@@ -162,7 +162,7 @@ class MainScreen(Screen):
             height=height,
             font_size=font_size,
             background_normal="",
-            background_color=(0.20, 0.60, 0.95, 1),
+            background_color=(0.35, 0.55, 0.75, 1),
             color=(1, 1, 1, 1)
         )
         return btn
@@ -203,7 +203,8 @@ class MainScreen(Screen):
             values=values,
             size_hint_y=None,
             height=height,
-            font_size=font_size
+            font_size=font_size,
+            background_color=(0.35, 0.55, 0.75, 1)
         )
         return sp
 
@@ -365,13 +366,13 @@ class MainScreen(Screen):
         button_grid.bind(minimum_height=button_grid.setter("height"))
 
         buttons = [
-            ("本月统计", (0.62, 0.35, 0.84, 1), self.show_monthly_stats),
-            ("历史统计", (0.20, 0.60, 0.95, 1), self.show_history_stats),
-            ("分类设置", (0.91, 0.52, 0.17, 1), self.show_categories),
-            ("导出数据", (0.10, 0.74, 0.70, 1), self.export_data),
-            ("查看记录", (0.95, 0.63, 0.10, 1), self.show_records),
-            ("删除记录", (0.91, 0.30, 0.24, 1), self.delete_records),
-            ("导入数据", (0.18, 0.80, 0.44, 1), self.import_data_popup),
+            ("本月统计", (0.35, 0.55, 0.75, 1), self.show_monthly_stats),
+            ("历史统计", (0.35, 0.55, 0.75, 1), self.show_history_stats),
+            ("分类设置", (0.35, 0.55, 0.75, 1), self.show_categories),
+            ("导出数据", (0.35, 0.55, 0.75, 1), self.export_data),
+            ("查看记录", (0.35, 0.55, 0.75, 1), self.show_records),
+            ("删除记录", (0.80, 0.30, 0.25, 1), self.delete_records),
+            ("导入数据", (0.35, 0.55, 0.75, 1), self.import_data_popup),
         ]
 
         for text, color, callback in buttons:
@@ -627,7 +628,7 @@ class MainScreen(Screen):
                 size_hint=(0.28, 1),
                 font_size=sp(16),
                 background_normal="",
-                background_color=(0.91, 0.30, 0.24, 1),
+                background_color=(0.80, 0.30, 0.25, 1),
                 color=(1, 1, 1, 1)
             )
             delete_btn.bind(on_press=lambda btn, cat=category: self.delete_category(cat))
@@ -659,7 +660,7 @@ class MainScreen(Screen):
             height=dp(46),
             font_size=sp(18),
             background_normal="",
-            background_color=(0.16, 0.69, 0.37, 1),
+            background_color=(0.20, 0.60, 0.35, 1),
             color=(1, 1, 1, 1)
         )
         add_btn.bind(on_press=self.add_category)
@@ -794,7 +795,7 @@ class MainScreen(Screen):
                 font_size=sp(16),
                 size_hint=(0.28, 1),
                 background_normal="",
-                background_color=(0.91, 0.30, 0.24, 1),
+                background_color=(0.80, 0.30, 0.25, 1),
                 color=(1, 1, 1, 1)
             )
             delete_btn.bind(on_press=lambda btn, idx=real_index: self.delete_single_record(idx))
@@ -811,7 +812,7 @@ class MainScreen(Screen):
             height=dp(44),
             font_size=sp(17),
             background_normal="",
-            background_color=(0.75, 0.22, 0.19, 1),
+            background_color=(0.80, 0.30, 0.25, 1),
             color=(1, 1, 1, 1)
         )
         clear_btn.bind(on_press=self.clear_all_records)
