@@ -1,0 +1,5 @@
+﻿records.json
+categories.json
+.aider*
+.venv/
+__pycache__/
