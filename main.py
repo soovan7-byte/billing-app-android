@@ -102,152 +102,263 @@ class MainScreen(Screen):
         return self.storage_dir
 
     # =========================
+    # UI 辅助方法
+    # =========================
+    def _make_card(self, bg_color=(1, 1, 1, 1), radius=dp(16)):
+        """创建一个带圆角白色背景的卡片容器"""
+        card = BoxLayout(size_hint_y=None)
+        card.bind(minimum_height=card.setter("height"))
+
+        with card.canvas.before:
+            Color(*bg_color)
+            card.bg = RoundedRectangle(radius=[radius] * 4, pos=card.pos, size=card.size)
+
+        def update_bg(instance, value):
+            instance.bg.pos = instance.pos
+            instance.bg.size = instance.size
+
+        card.bind(pos=update_bg, size=update_bg)
+        return card
+
+    def _make_title_label(self, text, font_size=sp(24), height=dp(48)):
+        label = Label(
+            text=text,
+            font_size=font_size,
+            size_hint_y=None,
+            height=height,
+            color=(0.12, 0.22, 0.36, 1)
+        )
+        return label
+
+    def _make_section_label(self, text, font_size=sp(18), height=dp(32)):
+        label = Label(
+            text=text,
+            font_size=font_size,
+            size_hint_y=None,
+            height=height,
+            halign="left",
+            valign="middle",
+            color=(0.12, 0.22, 0.36, 1)
+        )
+        label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        return label
+
+    def _make_primary_button(self, text, height=dp(48), font_size=sp(18)):
+        btn = Button(
+            text=text,
+            size_hint_y=None,
+            height=height,
+            font_size=font_size,
+            background_normal="",
+            background_color=(0.16, 0.69, 0.37, 1),
+            color=(1, 1, 1, 1)
+        )
+        return btn
+
+    def _make_secondary_button(self, text, height=dp(44), font_size=sp(17)):
+        btn = Button(
+            text=text,
+            size_hint_y=None,
+            height=height,
+            font_size=font_size,
+            background_normal="",
+            background_color=(0.20, 0.60, 0.95, 1),
+            color=(1, 1, 1, 1)
+        )
+        return btn
+
+    def _make_action_button(self, text, color, height=dp(48), font_size=sp(18)):
+        btn = Button(
+            text=text,
+            size_hint_y=None,
+            height=height,
+            font_size=font_size,
+            background_normal="",
+            background_color=color,
+            color=(1, 1, 1, 1)
+        )
+        return btn
+
+    def _make_text_input(self, hint_text="", input_filter=None, height=dp(46), font_size=sp(18)):
+        ti = TextInput(
+            hint_text=hint_text,
+            multiline=False,
+            input_filter=input_filter,
+            size_hint_y=None,
+            height=height,
+            font_size=font_size,
+            background_normal="",
+            background_active="",
+            background_color=(0.96, 0.96, 0.96, 1),
+            foreground_color=(0, 0, 0, 1),
+            cursor_color=(0, 0, 0, 1),
+            padding=[dp(10), dp(10), dp(10), dp(10)]
+        )
+        return ti
+
+    def _make_spinner(self, text, values, height=dp(46), font_size=sp(18)):
+        sp = Spinner(
+            text=text,
+            values=values,
+            size_hint_y=None,
+            height=height,
+            font_size=font_size
+        )
+        return sp
+
+    # =========================
     # UI
     # =========================
     def build_ui(self):
+        # 根布局：浅灰背景
         root = BoxLayout(orientation="vertical")
+        with root.canvas.before:
+            Color(0.94, 0.94, 0.94, 1)  # 浅灰
+            root.bg = RoundedRectangle(radius=[0]*4, pos=root.pos, size=root.size)
+
+        def update_root_bg(instance, value):
+            instance.bg.pos = instance.pos
+            instance.bg.size = instance.size
+        root.bind(pos=update_root_bg, size=update_root_bg)
 
         scroll = ScrollView(size_hint=(1, 1))
         content = BoxLayout(
             orientation="vertical",
-            spacing=dp(12),
-            padding=[dp(12), dp(12), dp(12), dp(20)],
+            spacing=dp(16),
+            padding=[dp(16), dp(16), dp(16), dp(24)],
             size_hint_y=None
         )
         content.bind(minimum_height=content.setter("height"))
 
-        # 标题
-        title = Label(
-            text="个人记账",
-            font_size=sp(26),
+        # ===== 标题区 =====
+        title_card = self._make_card()
+        title_layout = BoxLayout(
+            orientation="vertical",
+            spacing=dp(4),
+            padding=[dp(16), dp(12), dp(16), dp(12)],
             size_hint_y=None,
-            height=dp(48),
-            color=(0.12, 0.22, 0.36, 1)
+            height=dp(72)
         )
-        content.add_widget(title)
+        title_layout.add_widget(self._make_title_label("个人记账", font_size=sp(28), height=dp(44)))
+        title_layout.add_widget(Label(
+            text="简单、清晰的本地记账工具",
+            font_size=sp(14),
+            size_hint_y=None,
+            height=dp(22),
+            color=(0.5, 0.5, 0.5, 1)
+        ))
+        title_card.add_widget(title_layout)
+        content.add_widget(title_card)
 
-        # 表单卡片
-        form_card = self.make_card()
+        # ===== 表单卡片 =====
+        form_card = self._make_card()
         form_layout = BoxLayout(
             orientation="vertical",
-            spacing=dp(10),
-            padding=dp(12),
+            spacing=dp(12),
+            padding=[dp(16), dp(16), dp(16), dp(16)],
             size_hint_y=None
         )
         form_layout.bind(minimum_height=form_layout.setter("height"))
 
-        form_layout.add_widget(self.make_field_label("消费备注："))
-        self.name_input = TextInput(
-            multiline=False,
-            size_hint_y=None,
-            height=dp(46),
-            font_size=sp(18),
-            background_normal="",
-            background_active="",
-            background_color=(0.96, 0.96, 0.96, 1),
-            foreground_color=(0, 0, 0, 1),
-            cursor_color=(0, 0, 0, 1),
-            padding=[dp(10), dp(10), dp(10), dp(10)]
-        )
+        form_layout.add_widget(self._make_section_label("消费备注："))
+        self.name_input = self._make_text_input(hint_text="例如：午餐")
         form_layout.add_widget(self.name_input)
 
-        form_layout.add_widget(self.make_field_label("分类："))
-        self.category_spinner = Spinner(
+        form_layout.add_widget(self._make_section_label("分类："))
+        self.category_spinner = self._make_spinner(
             text="饮食正餐",
-            values=self.categories,
-            size_hint_y=None,
-            height=dp(46),
-            font_size=sp(18)
+            values=self.categories
         )
         form_layout.add_widget(self.category_spinner)
 
-        form_layout.add_widget(self.make_field_label("金额（元）："))
-        self.amount_input = TextInput(
-            multiline=False,
-            input_filter="float",
-            size_hint_y=None,
-            height=dp(46),
-            font_size=sp(18),
-            background_normal="",
-            background_active="",
-            background_color=(0.96, 0.96, 0.96, 1),
-            foreground_color=(0, 0, 0, 1),
-            cursor_color=(0, 0, 0, 1),
-            padding=[dp(10), dp(10), dp(10), dp(10)]
+        form_layout.add_widget(self._make_section_label("金额（元）："))
+        self.amount_input = self._make_text_input(
+            hint_text="0.00",
+            input_filter="float"
         )
         form_layout.add_widget(self.amount_input)
 
-        form_layout.add_widget(self.make_field_label("日期："))
+        form_layout.add_widget(self._make_section_label("日期："))
 
         now = datetime.now()
         date_layout = GridLayout(cols=3, spacing=dp(10), size_hint_y=None, height=dp(82))
 
-        year_box = BoxLayout(orientation="vertical", spacing=dp(5))
+        year_box = BoxLayout(orientation="vertical", spacing=dp(4))
         year_box.add_widget(Label(text="年", font_size=sp(16), size_hint_y=None, height=dp(24)))
-        self.year_input = TextInput(
+        self.year_input = self._make_text_input(
             text=str(now.year),
-            multiline=False,
-            input_filter="int",
-            size_hint_y=None,
-            height=dp(46),
-            font_size=sp(18),
-            background_normal="",
-            background_active="",
-            background_color=(0.96, 0.96, 0.96, 1),
-            foreground_color=(0, 0, 0, 1),
-            cursor_color=(0, 0, 0, 1),
-            padding=[dp(10), dp(10), dp(10), dp(10)]
+            input_filter="int"
         )
         year_box.add_widget(self.year_input)
         date_layout.add_widget(year_box)
 
-        month_box = BoxLayout(orientation="vertical", spacing=dp(5))
+        month_box = BoxLayout(orientation="vertical", spacing=dp(4))
         month_box.add_widget(Label(text="月", font_size=sp(16), size_hint_y=None, height=dp(24)))
-        self.month_spinner = Spinner(
+        self.month_spinner = self._make_spinner(
             text=str(now.month),
-            values=[str(i) for i in range(1, 13)],
-            size_hint_y=None,
-            height=dp(46),
-            font_size=sp(18)
+            values=[str(i) for i in range(1, 13)]
         )
         month_box.add_widget(self.month_spinner)
         date_layout.add_widget(month_box)
 
-        day_box = BoxLayout(orientation="vertical", spacing=dp(5))
+        day_box = BoxLayout(orientation="vertical", spacing=dp(4))
         day_box.add_widget(Label(text="日", font_size=sp(16), size_hint_y=None, height=dp(24)))
-        self.day_spinner = Spinner(
+        self.day_spinner = self._make_spinner(
             text=str(now.day),
-            values=[str(i) for i in range(1, 32)],
-            size_hint_y=None,
-            height=dp(46),
-            font_size=sp(18)
+            values=[str(i) for i in range(1, 32)]
         )
         day_box.add_widget(self.day_spinner)
         date_layout.add_widget(day_box)
 
         form_layout.add_widget(date_layout)
 
-        record_btn = Button(
-            text="记录账单",
-            size_hint_y=None,
-            height=dp(52),
-            font_size=sp(20),
-            background_normal="",
-            background_color=(0.16, 0.69, 0.37, 1),
-            color=(1, 1, 1, 1)
-        )
+        record_btn = self._make_primary_button("记录账单", height=dp(52), font_size=sp(20))
         record_btn.bind(on_press=self.record_bill)
         form_layout.add_widget(record_btn)
 
         form_card.add_widget(form_layout)
         content.add_widget(form_card)
 
-        # 功能按钮区
-        button_card = self.make_card()
+        # ===== 本月统计卡片 =====
+        expense_card = self._make_card()
+        expense_layout = BoxLayout(
+            orientation="vertical",
+            padding=[dp(16), dp(16), dp(16), dp(16)],
+            spacing=dp(8),
+            size_hint_y=None,
+            height=dp(130)
+        )
+
+        expense_layout.add_widget(self._make_section_label("本月总支出", font_size=sp(18), height=dp(28)))
+
+        self.monthly_expense_label = Label(
+            text="0.00 元",
+            font_size=sp(34),
+            size_hint_y=None,
+            height=dp(56),
+            color=(0.90, 0.30, 0.24, 1)
+        )
+        expense_layout.add_widget(self.monthly_expense_label)
+
+        # 记录数量
+        self.record_count_label = Label(
+            text="记录数：0",
+            font_size=sp(16),
+            size_hint_y=None,
+            height=dp(24),
+            color=(0.4, 0.4, 0.4, 1)
+        )
+        expense_layout.add_widget(self.record_count_label)
+
+        expense_card.add_widget(expense_layout)
+        content.add_widget(expense_card)
+
+        # ===== 功能按钮卡片 =====
+        button_card = self._make_card()
         button_grid = GridLayout(
             cols=2,
-            spacing=dp(10),
-            padding=dp(12),
+            spacing=dp(12),
+            padding=[dp(16), dp(16), dp(16), dp(16)],
             size_hint_y=None
         )
         button_grid.bind(minimum_height=button_grid.setter("height"))
@@ -263,82 +374,24 @@ class MainScreen(Screen):
         ]
 
         for text, color, callback in buttons:
-            btn = Button(
-                text=text,
-                size_hint_y=None,
-                height=dp(48),
-                font_size=sp(18),
-                background_normal="",
-                background_color=color,
-                color=(1, 1, 1, 1)
-            )
+            btn = self._make_action_button(text, color, height=dp(48), font_size=sp(17))
             btn.bind(on_press=callback)
             button_grid.add_widget(btn)
 
         button_card.add_widget(button_grid)
         content.add_widget(button_card)
 
-        # 本月总支出
-        expense_card = self.make_card()
-        expense_layout = BoxLayout(
-            orientation="vertical",
-            padding=dp(12),
-            spacing=dp(6),
-            size_hint_y=None,
-            height=dp(110)
-        )
-
-        expense_layout.add_widget(Label(
-            text="本月总支出：",
-            font_size=sp(18),
-            size_hint_y=None,
-            height=dp(28),
-            color=(0.12, 0.22, 0.36, 1)
-        ))
-
-        self.monthly_expense_label = Label(
-            text="0.00 元",
-            font_size=sp(30),
-            size_hint_y=None,
-            height=dp(50),
-            color=(0.90, 0.30, 0.24, 1)
-        )
-        expense_layout.add_widget(self.monthly_expense_label)
-
-        expense_card.add_widget(expense_layout)
-        content.add_widget(expense_card)
-
         scroll.add_widget(content)
         root.add_widget(scroll)
         self.add_widget(root)
 
     def make_card(self):
-        card = BoxLayout(size_hint_y=None)
-        card.bind(minimum_height=card.setter("height"))
-
-        with card.canvas.before:
-            Color(1, 1, 1, 1)
-            card.bg = RoundedRectangle(radius=[dp(16)] * 4, pos=card.pos, size=card.size)
-
-        def update_bg(instance, value):
-            instance.bg.pos = instance.pos
-            instance.bg.size = instance.size
-
-        card.bind(pos=update_bg, size=update_bg)
-        return card
+        """保留原有方法，供其他可能调用的地方使用"""
+        return self._make_card()
 
     def make_field_label(self, text):
-        label = Label(
-            text=text,
-            font_size=sp(18),
-            size_hint_y=None,
-            height=dp(32),
-            halign="left",
-            valign="middle",
-            color=(0.12, 0.22, 0.36, 1)
-        )
-        label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
-        return label
+        """保留原有方法，供其他可能调用的地方使用"""
+        return self._make_section_label(text)
 
     # =========================
     # 数据处理
@@ -399,16 +452,19 @@ class MainScreen(Screen):
     def update_monthly_expense(self):
         current_month = datetime.now().strftime("%Y-%m")
         total = 0.0
+        count = 0
 
         for record in self.records:
             try:
                 record_date = datetime.strptime(str(record.get("日期", "")), "%Y-%m-%d")
                 if record_date.strftime("%Y-%m") == current_month:
                     total += float(record.get("金额", 0))
+                    count += 1
             except Exception:
                 continue
 
         self.monthly_expense_label.text = f"{total:.2f} 元"
+        self.record_count_label.text = f"记录数：{count}"
 
     # =========================
     # 记账
