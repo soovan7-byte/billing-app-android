@@ -195,6 +195,16 @@ class MainScreen(Screen):
             padding=[dp(10), dp(10), dp(10), dp(10)],
             **kwargs
         )
+        # 添加圆角背景
+        with ti.canvas.before:
+            Color(0.96, 0.96, 0.96, 1)  # 与背景色一致
+            ti.bg = RoundedRectangle(radius=[dp(8)]*4, pos=ti.pos, size=ti.size)
+
+        def update_bg(instance, value):
+            instance.bg.pos = instance.pos
+            instance.bg.size = instance.size
+
+        ti.bind(pos=update_bg, size=update_bg)
         return ti
 
     def _make_spinner(self, text, values, height=dp(46), font_size=sp(18)):
@@ -204,8 +214,19 @@ class MainScreen(Screen):
             size_hint_y=None,
             height=height,
             font_size=font_size,
-            background_color=(0.35, 0.55, 0.75, 1)
+            background_normal="",
+            background_color=(0, 0, 0, 0)  # 透明背景，用 canvas 绘制
         )
+        # 添加圆角背景
+        with sp.canvas.before:
+            Color(0.85, 0.90, 0.95, 1)  # 浅蓝灰
+            sp.bg = RoundedRectangle(radius=[dp(8)]*4, pos=sp.pos, size=sp.size)
+
+        def update_bg(instance, value):
+            instance.bg.pos = instance.pos
+            instance.bg.size = instance.size
+
+        sp.bind(pos=update_bg, size=update_bg)
         return sp
 
     # =========================
@@ -232,25 +253,40 @@ class MainScreen(Screen):
         )
         content.bind(minimum_height=content.setter("height"))
 
-        # ===== 标题区 =====
-        title_card = self._make_card()
-        title_layout = BoxLayout(
+
+        # ===== 本月统计卡片 =====
+        expense_card = self._make_card()
+        expense_layout = BoxLayout(
             orientation="vertical",
-            spacing=dp(4),
-            padding=[dp(16), dp(12), dp(16), dp(12)],
+            padding=[dp(16), dp(24), dp(16), dp(16)],
+            spacing=dp(8),
             size_hint_y=None,
-            height=dp(72)
+            height=dp(150)
         )
-        title_layout.add_widget(self._make_title_label("个人记账", font_size=sp(28), height=dp(44)))
-        title_layout.add_widget(Label(
-            text="简单、清晰的本地记账工具",
-            font_size=sp(14),
+
+        expense_layout.add_widget(self._make_section_label("本月总支出", font_size=sp(18), height=dp(28)))
+
+        self.monthly_expense_label = Label(
+            text="0.00 元",
+            font_size=sp(34),
             size_hint_y=None,
-            height=dp(22),
-            color=(0.5, 0.5, 0.5, 1)
-        ))
-        title_card.add_widget(title_layout)
-        content.add_widget(title_card)
+            height=dp(56),
+            color=(0.90, 0.30, 0.24, 1)
+        )
+        expense_layout.add_widget(self.monthly_expense_label)
+
+        # 记录数量
+        self.record_count_label = Label(
+            text="记录数：0",
+            font_size=sp(16),
+            size_hint_y=None,
+            height=dp(24),
+            color=(0.4, 0.4, 0.4, 1)
+        )
+        expense_layout.add_widget(self.record_count_label)
+
+        expense_card.add_widget(expense_layout)
+        content.add_widget(expense_card)
 
         # ===== 表单卡片 =====
         form_card = self._make_card()
@@ -321,39 +357,6 @@ class MainScreen(Screen):
         form_card.add_widget(form_layout)
         content.add_widget(form_card)
 
-        # ===== 本月统计卡片 =====
-        expense_card = self._make_card()
-        expense_layout = BoxLayout(
-            orientation="vertical",
-            padding=[dp(16), dp(16), dp(16), dp(16)],
-            spacing=dp(8),
-            size_hint_y=None,
-            height=dp(130)
-        )
-
-        expense_layout.add_widget(self._make_section_label("本月总支出", font_size=sp(18), height=dp(28)))
-
-        self.monthly_expense_label = Label(
-            text="0.00 元",
-            font_size=sp(34),
-            size_hint_y=None,
-            height=dp(56),
-            color=(0.90, 0.30, 0.24, 1)
-        )
-        expense_layout.add_widget(self.monthly_expense_label)
-
-        # 记录数量
-        self.record_count_label = Label(
-            text="记录数：0",
-            font_size=sp(16),
-            size_hint_y=None,
-            height=dp(24),
-            color=(0.4, 0.4, 0.4, 1)
-        )
-        expense_layout.add_widget(self.record_count_label)
-
-        expense_card.add_widget(expense_layout)
-        content.add_widget(expense_card)
 
         # ===== 功能按钮卡片 =====
         button_card = self._make_card()
