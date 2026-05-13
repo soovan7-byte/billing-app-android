@@ -179,7 +179,7 @@ class MainScreen(Screen):
         )
         return btn
 
-    def _make_text_input(self, hint_text="", input_filter=None, height=dp(46), font_size=sp(18)):
+    def _make_text_input(self, hint_text="", input_filter=None, height=dp(46), font_size=sp(18), **kwargs):
         ti = TextInput(
             hint_text=hint_text,
             multiline=False,
@@ -192,7 +192,8 @@ class MainScreen(Screen):
             background_color=(0.96, 0.96, 0.96, 1),
             foreground_color=(0, 0, 0, 1),
             cursor_color=(0, 0, 0, 1),
-            padding=[dp(10), dp(10), dp(10), dp(10)]
+            padding=[dp(10), dp(10), dp(10), dp(10)],
+            **kwargs
         )
         return ti
 
