@@ -193,18 +193,12 @@ class MainScreen(Screen):
             foreground_color=(0, 0, 0, 1),
             cursor_color=(0, 0, 0, 1),
             padding=[dp(10), dp(10), dp(10), dp(10)],
+            disabled=False,
+            readonly=False,
+            write_tab=False,
             **kwargs
         )
-        # 添加圆角背景
-        with ti.canvas.before:
-            Color(0.96, 0.96, 0.96, 1)  # 与背景色一致
-            ti.bg = RoundedRectangle(radius=[dp(8)]*4, pos=ti.pos, size=ti.size)
-
-        def update_bg(instance, value):
-            instance.bg.pos = instance.pos
-            instance.bg.size = instance.size
-
-        ti.bind(pos=update_bg, size=update_bg)
+        # 移除自定义圆角背景，使用默认 TextInput 外观
         return ti
 
     def _make_spinner(self, text, values, height=dp(46), font_size=sp(18)):
