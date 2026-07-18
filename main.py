@@ -98,11 +98,23 @@ class ThemedSpinnerOption(SpinnerOption):
     """保证下拉选项在 Android 上保持清晰且具备足够触控高度。"""
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.size_hint_y = None
+        self.height = CONTROL_HEIGHT
         self.background_normal = ""
-        self.background_color = COLOR_PRIMARY_LIGHT
+        self.background_disabled_normal = ""
+        self.background_color = COLOR_TRANSPARENT
         self.color = COLOR_PRIMARY
         self.font_size = sp(17)
-        self.height = CONTROL_HEIGHT
+
+        with self.canvas.before:
+            Color(*COLOR_PRIMARY_LIGHT)
+            self.option_bg = RoundedRectangle(pos=self.pos, size=self.size)
+
+        def update_background(instance, value):
+            instance.option_bg.pos = instance.pos
+            instance.option_bg.size = instance.size
+
+        self.bind(pos=update_background, size=update_background)
 
 
 class CategoryPieChart(Widget):
@@ -320,11 +332,15 @@ class MainScreen(Screen):
         return self._add_rounded_background(spinner, COLOR_CARD_BG, INPUT_RADIUS, COLOR_BORDER)
 
     def _make_popup(self, title, content, size_hint, auto_dismiss=False):
+        # 清空 Popup 的默认纹理背景，并为内容层提供明确的不透明底色。
+        if not hasattr(content, "theme_bg"):
+            self._add_rounded_background(content, COLOR_CARD_BG, INPUT_RADIUS)
         return Popup(
             title=title,
             content=content,
             size_hint=size_hint,
             auto_dismiss=auto_dismiss,
+            background="",
             background_color=COLOR_CARD_BG,
             separator_color=COLOR_BORDER,
             title_color=COLOR_TEXT,
@@ -1839,17 +1855,29 @@ class MainScreen(Screen):
     def show_popup(self, title, message):
         content = BoxLayout(orientation="vertical", spacing=CARD_SPACING, padding=CARD_PADDING)
 
+        if "成功" in title or "导入完成" in title:
+            status_color = COLOR_SUCCESS
+            status_background = COLOR_SUCCESS_LIGHT
+        elif "错误" in title or "失败" in title:
+            status_color = COLOR_DANGER
+            status_background = COLOR_DANGER_LIGHT
+        else:
+            status_color = COLOR_PRIMARY
+            status_background = COLOR_PRIMARY_LIGHT
+
+        self._add_rounded_background(content, status_background, INPUT_RADIUS)
+
         msg = Label(
             text=message,
             font_size=sp(17),
             halign="center",
             valign="middle",
-            color=COLOR_TEXT
+            color=status_color
         )
         msg.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(8), None)))
         content.add_widget(msg)
 
-        btn = self._make_secondary_button("确定")
+        btn = self._make_button("确定", status_color, COLOR_WHITE)
         content.add_widget(btn)
 
         popup = self._make_popup(title, content, (0.88, 0.42))
