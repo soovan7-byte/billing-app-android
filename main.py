@@ -221,6 +221,8 @@ class MainScreen(Screen):
         self._android_export_bound = False
         self._pending_android_export = None
         self._pending_android_import = False
+        self.selected_record_date = datetime.now().date()
+        self._success_feedback_event = None
 
         self.storage_dir = self.get_storage_dir()
         os.makedirs(self.storage_dir, exist_ok=True)
@@ -527,37 +529,46 @@ class MainScreen(Screen):
             padding=[CARD_PADDING] * 4, size_hint_y=None
         )
         form_layout.bind(minimum_height=form_layout.setter("height"))
-        form_layout.add_widget(self._make_section_label("消费备注："))
-        self.name_input = self._make_text_input(hint_text="例如：午餐")
-        form_layout.add_widget(self.name_input)
-        form_layout.add_widget(self._make_section_label("分类："))
-        self.category_spinner = self._make_spinner(text="饮食正餐", values=self.categories)
-        form_layout.add_widget(self.category_spinner)
         form_layout.add_widget(self._make_section_label("金额（元）："))
         self.amount_input = self._make_text_input(hint_text="0.00", input_filter="float")
         form_layout.add_widget(self.amount_input)
-        form_layout.add_widget(self._make_section_label("日期："))
+        form_layout.add_widget(self._make_section_label("分类："))
+        self.category_spinner = self._make_spinner(text="饮食正餐", values=self.categories)
+        form_layout.add_widget(self.category_spinner)
+        form_layout.add_widget(self._make_section_label("消费备注："))
+        self.name_input = self._make_text_input(hint_text="例如：午餐")
+        form_layout.add_widget(self.name_input)
 
-        now = datetime.now()
-        date_layout = GridLayout(cols=3, spacing=dp(10), size_hint_y=None, height=dp(82))
-        date_fields = (
-            ("年", self._make_text_input(text=str(now.year), input_filter="int")),
-            ("月", self._make_spinner(str(now.month), [str(i) for i in range(1, 13)])),
-            ("日", self._make_spinner(str(now.day), [str(i) for i in range(1, 32)])),
+        date_layout = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(8))
+        date_text_box = BoxLayout(orientation="vertical", spacing=dp(2))
+        date_text_box.add_widget(self._make_section_label("日期", height=dp(24)))
+        self.record_date_label = Label(
+            color=COLOR_TEXT, font_size=sp(16), halign="left", valign="middle"
         )
-        self.year_input, self.month_spinner, self.day_spinner = [field for _, field in date_fields]
-        for label_text, field in date_fields:
-            field_box = BoxLayout(orientation="vertical", spacing=dp(4))
-            field_box.add_widget(Label(
-                text=label_text, color=COLOR_TEXT_SECONDARY, font_size=sp(15),
-                size_hint_y=None, height=dp(24)
-            ))
-            field_box.add_widget(field)
-            date_layout.add_widget(field_box)
+        self.record_date_label.bind(
+            size=lambda inst, val: setattr(inst, "text_size", val)
+        )
+        date_text_box.add_widget(self.record_date_label)
+        date_layout.add_widget(date_text_box)
+        change_date_btn = self._make_text_button("修改", height=dp(48), font_size=sp(16))
+        change_date_btn.size_hint_x = None
+        change_date_btn.width = dp(72)
+        change_date_btn.bind(on_press=self.open_record_date_popup)
+        date_layout.add_widget(change_date_btn)
+        self._update_record_date_label()
         form_layout.add_widget(date_layout)
-        record_btn = self._make_primary_button("记录账单", height=PRIMARY_BUTTON_HEIGHT, font_size=sp(19))
+        record_btn = self._make_primary_button("记一笔", height=PRIMARY_BUTTON_HEIGHT, font_size=sp(19))
         record_btn.bind(on_press=self.record_bill)
         form_layout.add_widget(record_btn)
+        self.record_success_label = Label(
+            text="", color=COLOR_SUCCESS, font_size=sp(15),
+            size_hint_y=None, height=dp(28), opacity=0,
+            halign="center", valign="middle"
+        )
+        self.record_success_label.bind(
+            size=lambda inst, val: setattr(inst, "text_size", val)
+        )
+        form_layout.add_widget(self.record_success_label)
         form_card.add_widget(form_layout)
         content.add_widget(form_card)
 
@@ -854,6 +865,95 @@ class MainScreen(Screen):
     # =========================
     # 记账
     # =========================
+    def _update_record_date_label(self):
+        date_text = self.selected_record_date.strftime("%Y-%m-%d")
+        prefix = "今天" if self.selected_record_date == datetime.now().date() else "已选"
+        self.record_date_label.text = f"{prefix} · {date_text}"
+
+    def open_record_date_popup(self, instance):
+        """使用当前选中日期初始化临时控件，取消时不写回页面状态。"""
+        current_date = self.selected_record_date
+        content = BoxLayout(
+            orientation="vertical", spacing=CARD_SPACING, padding=CARD_PADDING
+        )
+        date_fields = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(82))
+        year_input = self._make_text_input(
+            text=str(current_date.year), input_filter="int"
+        )
+        month_spinner = self._make_spinner(
+            str(current_date.month), [str(i) for i in range(1, 13)]
+        )
+        day_spinner = self._make_spinner(
+            str(current_date.day), [str(i) for i in range(1, 32)]
+        )
+        for label_text, field in (
+            ("年", year_input), ("月", month_spinner), ("日", day_spinner)
+        ):
+            field_box = BoxLayout(orientation="vertical", spacing=dp(4))
+            field_box.add_widget(Label(
+                text=label_text, color=COLOR_TEXT_SECONDARY, font_size=sp(15),
+                size_hint_y=None, height=dp(24)
+            ))
+            field_box.add_widget(field)
+            date_fields.add_widget(field_box)
+        content.add_widget(date_fields)
+
+        actions = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+        today_button = self._make_secondary_button("今天")
+        cancel_button = self._make_text_button("取消")
+        confirm_button = self._make_primary_button("确定", height=dp(48), font_size=sp(17))
+        actions.add_widget(today_button)
+        actions.add_widget(cancel_button)
+        actions.add_widget(confirm_button)
+        content.add_widget(actions)
+
+        popup = self._make_popup("修改日期", content, (0.92, 0.38))
+
+        def use_today(button):
+            today = datetime.now().date()
+            year_input.text = str(today.year)
+            month_spinner.text = str(today.month)
+            day_spinner.text = str(today.day)
+
+        def confirm_date(button):
+            try:
+                year_text = year_input.text.strip()
+                if not year_text:
+                    self.show_popup("错误", "请输入年份。")
+                    return
+                year = int(year_text)
+                if year < 1900 or year > 9999:
+                    self.show_popup("错误", "请输入合理的年份，例如 2026。")
+                    return
+                selected = datetime(
+                    year, int(month_spinner.text), int(day_spinner.text)
+                ).date()
+            except (TypeError, ValueError):
+                self.show_popup("错误", "日期无效，请检查年月日。")
+                return
+            self.selected_record_date = selected
+            self._update_record_date_label()
+            popup.dismiss()
+
+        today_button.bind(on_press=use_today)
+        cancel_button.bind(on_press=popup.dismiss)
+        confirm_button.bind(on_press=confirm_date)
+        popup.open()
+
+    def _hide_record_success(self, dt):
+        self.record_success_label.text = ""
+        self.record_success_label.opacity = 0
+        self._success_feedback_event = None
+
+    def _show_record_success(self, amount, note):
+        if self._success_feedback_event is not None:
+            self._success_feedback_event.cancel()
+        self.record_success_label.text = f"已记录 {amount:.2f} 元 · {note}"
+        self.record_success_label.opacity = 1
+        self._success_feedback_event = Clock.schedule_once(
+            self._hide_record_success, 2
+        )
+
     def record_bill(self, instance):
         note = self.name_input.text.strip()
         category = self.category_spinner.text.strip()
@@ -875,25 +975,7 @@ class MainScreen(Screen):
             self.show_popup("错误", "请输入有效的正数金额。")
             return
 
-        try:
-            year_text = self.year_input.text.strip()
-            if not year_text:
-                self.show_popup("错误", "请输入年份。")
-                return
-
-            year = int(year_text)
-            month = int(self.month_spinner.text)
-            day = int(self.day_spinner.text)
-
-            if year < 1900 or year > 9999:
-                self.show_popup("错误", "请输入合理的年份，例如 2026。")
-                return
-
-            date_obj = datetime(year, month, day)
-            date_str = date_obj.strftime("%Y-%m-%d")
-        except Exception:
-            self.show_popup("错误", "日期无效，请检查年月日。")
-            return
+        date_str = self.selected_record_date.strftime("%Y-%m-%d")
 
         record = {
             "姓名/备注": note,
@@ -909,8 +991,9 @@ class MainScreen(Screen):
 
         self.name_input.text = ""
         self.amount_input.text = ""
-
-        self.show_popup("成功", f"已记录：\n{note}\n{category} - {amount:.2f}元")
+        self.selected_record_date = datetime.now().date()
+        self._update_record_date_label()
+        self._show_record_success(amount, note)
 
     # =========================
     # 统计
