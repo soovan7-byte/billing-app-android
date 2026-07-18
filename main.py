@@ -1659,10 +1659,28 @@ class MainScreen(Screen):
     def import_file(self, file_path):
         try:
             imported_records = []
+            imported_categories = None
+            import_kind = "records"
 
             if file_path.lower().endswith(".json"):
                 with open(file_path, "r", encoding="utf-8") as f:
-                    imported_records = json.load(f)
+                    json_data = json.load(f)
+
+                if isinstance(json_data, dict):
+                    if "records" not in json_data and "categories" not in json_data:
+                        self.show_popup("导入失败", "文件内容格式不正确。")
+                        return
+                    imported_records = json_data.get("records", [])
+                    imported_categories = json_data.get("categories", [])
+                    if not isinstance(imported_records, list) or not isinstance(imported_categories, list):
+                        self.show_popup("导入失败", "文件内容格式不正确。")
+                        return
+                    import_kind = "backup"
+                elif isinstance(json_data, list) and all(isinstance(item, str) for item in json_data):
+                    imported_categories = json_data
+                    import_kind = "categories"
+                else:
+                    imported_records = json_data
 
             elif file_path.lower().endswith(".csv"):
                 with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
@@ -1757,16 +1775,32 @@ class MainScreen(Screen):
                 new_categories.add(clean_category)
                 existing_keys.add(key)
 
-            if not valid_records and duplicate_count > 0:
+            if import_kind == "records" and not valid_records and duplicate_count > 0:
                 self.show_popup("导入完成", f"没有新增记录。\n检测到 {duplicate_count} 条重复记录，已自动跳过。")
                 return
 
-            if not valid_records:
+            if import_kind == "records" and not valid_records:
                 self.show_popup("导入失败", "文件中没有找到可导入的有效记录。")
                 return
 
             self.records.extend(valid_records)
-            self.sort_records()
+            if valid_records:
+                self.sort_records()
+
+            added_category_count = 0
+            duplicate_category_count = 0
+            if imported_categories is not None:
+                for category in imported_categories:
+                    if not isinstance(category, str):
+                        continue
+                    clean_category = category.strip()
+                    if not clean_category:
+                        continue
+                    if clean_category in self.categories:
+                        duplicate_category_count += 1
+                        continue
+                    self.categories.append(clean_category)
+                    added_category_count += 1
 
             for cat in sorted(new_categories):
                 if cat and cat not in self.categories:
@@ -1779,10 +1813,24 @@ class MainScreen(Screen):
             self.save_data()
             self.update_monthly_expense()
 
-            self.show_popup(
-                "导入成功",
-                f"成功导入 {len(valid_records)} 条记录。\n自动跳过 {duplicate_count} 条重复记录。"
-            )
+            if import_kind == "categories":
+                self.show_popup(
+                    "导入完成",
+                    f"新增分类 {added_category_count} 个。\n重复分类 {duplicate_category_count} 个。"
+                )
+            elif import_kind == "backup":
+                self.show_popup(
+                    "导入完成",
+                    f"成功导入 {len(valid_records)} 条记录。\n"
+                    f"自动跳过 {duplicate_count} 条重复记录。\n"
+                    f"新增分类 {added_category_count} 个。\n"
+                    f"重复分类 {duplicate_category_count} 个。"
+                )
+            else:
+                self.show_popup(
+                    "导入成功",
+                    f"成功导入 {len(valid_records)} 条记录。\n自动跳过 {duplicate_count} 条重复记录。"
+                )
 
         except Exception as e:
             self.show_popup("导入失败", f"发生错误：\n{str(e)}")
