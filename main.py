@@ -40,7 +40,7 @@ from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.uix.scrollview import ScrollView
-from kivy.uix.spinner import Spinner
+from kivy.uix.spinner import Spinner, SpinnerOption
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 from kivy.graphics import Color, Ellipse, RoundedRectangle
@@ -52,6 +52,32 @@ from openpyxl import Workbook, load_workbook
 if platform in ("win", "linux", "macosx"):
     Window.minimum_width = 380
     Window.minimum_height = 700
+
+# =========================
+# 移动端视觉主题
+# =========================
+COLOR_PAGE_BG = (0.969, 0.973, 0.980, 1)       # F7F8FA
+COLOR_CARD_BG = (1, 1, 1, 1)                   # FFFFFF
+COLOR_PRIMARY = (0.145, 0.388, 0.922, 1)       # 2563EB
+COLOR_PRIMARY_LIGHT = (0.937, 0.965, 1, 1)      # EFF6FF
+COLOR_TEXT = (0.067, 0.094, 0.153, 1)           # 111827
+COLOR_TEXT_SECONDARY = (0.420, 0.447, 0.502, 1) # 6B7280
+COLOR_BORDER = (0.898, 0.906, 0.922, 1)         # E5E7EB
+COLOR_DANGER = (0.863, 0.149, 0.149, 1)         # DC2626
+COLOR_DANGER_LIGHT = (0.996, 0.949, 0.949, 1)   # FEF2F2
+COLOR_SUCCESS = (0.086, 0.639, 0.290, 1)        # 16A34A
+COLOR_SUCCESS_LIGHT = (0.941, 0.992, 0.957, 1)  # F0FDF4
+COLOR_WHITE = (1, 1, 1, 1)
+COLOR_TRANSPARENT = (1, 1, 1, 0)
+
+PAGE_PADDING = dp(16)
+CARD_SPACING = dp(12)
+CARD_PADDING = dp(16)
+CARD_RADIUS = dp(16)
+BUTTON_RADIUS = dp(12)
+INPUT_RADIUS = dp(10)
+PRIMARY_BUTTON_HEIGHT = dp(52)
+CONTROL_HEIGHT = dp(48)
 
 
 CATEGORY_CHART_COLORS = [
@@ -66,6 +92,29 @@ CATEGORY_CHART_COLORS = [
     (0.84, 0.15, 0.45, 1),
     (0.40, 0.70, 0.20, 1),
 ]
+
+
+class ThemedSpinnerOption(SpinnerOption):
+    """保证下拉选项在 Android 上保持清晰且具备足够触控高度。"""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.size_hint_y = None
+        self.height = CONTROL_HEIGHT
+        self.background_normal = ""
+        self.background_disabled_normal = ""
+        self.background_color = COLOR_TRANSPARENT
+        self.color = COLOR_PRIMARY
+        self.font_size = sp(17)
+
+        with self.canvas.before:
+            Color(*COLOR_PRIMARY_LIGHT)
+            self.option_bg = RoundedRectangle(pos=self.pos, size=self.size)
+
+        def update_background(instance, value):
+            instance.option_bg.pos = instance.pos
+            instance.option_bg.size = instance.size
+
+        self.bind(pos=update_background, size=update_background)
 
 
 class CategoryPieChart(Widget):
@@ -160,21 +209,39 @@ class MainScreen(Screen):
     # =========================
     # UI 辅助方法
     # =========================
-    def _make_card(self, bg_color=(1, 1, 1, 1), radius=dp(16)):
+    def _add_rounded_background(self, widget, color, radius, border_color=None):
+        """为控件添加随位置和尺寸更新的圆角背景，且不拦截触摸事件。"""
+        with widget.canvas.before:
+            if border_color is not None:
+                Color(*border_color)
+                widget.theme_border = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius] * 4)
+            Color(*color)
+            inset = dp(1) if border_color is not None else 0
+            widget.theme_bg = RoundedRectangle(
+                pos=(widget.x + inset, widget.y + inset),
+                size=(max(0, widget.width - inset * 2), max(0, widget.height - inset * 2)),
+                radius=[max(0, radius - inset)] * 4
+            )
+
+        def update_background(instance, value):
+            if border_color is not None:
+                instance.theme_border.pos = instance.pos
+                instance.theme_border.size = instance.size
+            instance.theme_bg.pos = (instance.x + inset, instance.y + inset)
+            instance.theme_bg.size = (
+                max(0, instance.width - inset * 2),
+                max(0, instance.height - inset * 2)
+            )
+
+        widget.bind(pos=update_background, size=update_background)
+        return widget
+
+    def _make_card(self, bg_color=COLOR_CARD_BG, radius=CARD_RADIUS):
         """创建一个带圆角白色背景的卡片容器"""
         card = BoxLayout(size_hint_y=None)
         card.bind(minimum_height=card.setter("height"))
 
-        with card.canvas.before:
-            Color(*bg_color)
-            card.bg = RoundedRectangle(radius=[radius] * 4, pos=card.pos, size=card.size)
-
-        def update_bg(instance, value):
-            instance.bg.pos = instance.pos
-            instance.bg.size = instance.size
-
-        card.bind(pos=update_bg, size=update_bg)
-        return card
+        return self._add_rounded_background(card, bg_color, radius)
 
     def _make_title_label(self, text, font_size=sp(24), height=dp(48)):
         label = Label(
@@ -182,7 +249,7 @@ class MainScreen(Screen):
             font_size=font_size,
             size_hint_y=None,
             height=height,
-            color=(0.12, 0.22, 0.36, 1)
+            color=COLOR_TEXT
         )
         return label
 
@@ -194,48 +261,41 @@ class MainScreen(Screen):
             height=height,
             halign="left",
             valign="middle",
-            color=(0.12, 0.22, 0.36, 1)
+            color=COLOR_TEXT
         )
         label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
         return label
 
-    def _make_primary_button(self, text, height=dp(48), font_size=sp(18)):
+    def _make_button(self, text, bg_color, text_color, height=CONTROL_HEIGHT, font_size=sp(17)):
         btn = Button(
             text=text,
             size_hint_y=None,
             height=height,
             font_size=font_size,
             background_normal="",
-            background_color=(0.18, 0.63, 0.35, 1),
-            color=(1, 1, 1, 1)
+            background_color=COLOR_TRANSPARENT,
+            color=text_color
         )
-        return btn
+        return self._add_rounded_background(btn, bg_color, BUTTON_RADIUS)
 
-    def _make_secondary_button(self, text, height=dp(44), font_size=sp(17)):
-        btn = Button(
-            text=text,
-            size_hint_y=None,
-            height=height,
-            font_size=font_size,
-            background_normal="",
-            background_color=(0.35, 0.55, 0.75, 1),
-            color=(1, 1, 1, 1)
-        )
-        return btn
+    def _make_primary_button(self, text, height=PRIMARY_BUTTON_HEIGHT, font_size=sp(18)):
+        return self._make_button(text, COLOR_PRIMARY, COLOR_WHITE, height, font_size)
+
+    def _make_secondary_button(self, text, height=CONTROL_HEIGHT, font_size=sp(17)):
+        return self._make_button(text, COLOR_PRIMARY_LIGHT, COLOR_PRIMARY, height, font_size)
+
+    def _make_text_button(self, text, height=CONTROL_HEIGHT, font_size=sp(17)):
+        return self._make_button(text, COLOR_CARD_BG, COLOR_TEXT_SECONDARY, height, font_size)
+
+    def _make_danger_button(self, text, height=CONTROL_HEIGHT, font_size=sp(17)):
+        return self._make_button(text, COLOR_DANGER_LIGHT, COLOR_DANGER, height, font_size)
 
     def _make_action_button(self, text, color, height=dp(48), font_size=sp(18)):
-        btn = Button(
-            text=text,
-            size_hint_y=None,
-            height=height,
-            font_size=font_size,
-            background_normal="",
-            background_color=color,
-            color=(1, 1, 1, 1)
-        )
-        return btn
+        if color == COLOR_DANGER:
+            return self._make_danger_button(text, height, font_size)
+        return self._make_secondary_button(text, height, font_size)
 
-    def _make_text_input(self, hint_text="", input_filter=None, height=dp(46), font_size=sp(18), **kwargs):
+    def _make_text_input(self, hint_text="", input_filter=None, height=CONTROL_HEIGHT, font_size=sp(17), **kwargs):
         ti = TextInput(
             hint_text=hint_text,
             multiline=False,
@@ -245,49 +305,56 @@ class MainScreen(Screen):
             font_size=font_size,
             background_normal="",
             background_active="",
-            background_color=(0.96, 0.96, 0.96, 1),
-            foreground_color=(0, 0, 0, 1),
-            cursor_color=(0, 0, 0, 1),
-            padding=[dp(10), dp(10), dp(10), dp(10)],
+            background_color=COLOR_TRANSPARENT,
+            foreground_color=COLOR_TEXT,
+            cursor_color=COLOR_PRIMARY,
+            hint_text_color=COLOR_TEXT_SECONDARY,
+            padding=[dp(12), dp(12), dp(12), dp(10)],
             disabled=False,
             readonly=False,
             write_tab=False,
             **kwargs
         )
-        # 移除自定义圆角背景，使用默认 TextInput 外观
-        return ti
+        return self._add_rounded_background(ti, COLOR_CARD_BG, INPUT_RADIUS, COLOR_BORDER)
 
-    def _make_spinner(self, text, values, height=dp(46), font_size=sp(18)):
-        sp = Spinner(
+    def _make_spinner(self, text, values, height=CONTROL_HEIGHT, font_size=sp(17)):
+        spinner = Spinner(
             text=text,
             values=values,
             size_hint_y=None,
             height=height,
             font_size=font_size,
+            option_cls=ThemedSpinnerOption,
             background_normal="",
-            background_color=(0.10, 0.17, 0.24, 1),
-            color=(1, 1, 1, 1)
+            background_color=COLOR_TRANSPARENT,
+            color=COLOR_TEXT
         )
-        # 添加圆角背景
-        with sp.canvas.before:
-            Color(0.85, 0.90, 0.95, 1)  # 浅蓝灰
-            sp.bg = RoundedRectangle(radius=[dp(8)]*4, pos=sp.pos, size=sp.size)
+        return self._add_rounded_background(spinner, COLOR_CARD_BG, INPUT_RADIUS, COLOR_BORDER)
 
-        def update_bg(instance, value):
-            instance.bg.pos = instance.pos
-            instance.bg.size = instance.size
-
-        sp.bind(pos=update_bg, size=update_bg)
-        return sp
+    def _make_popup(self, title, content, size_hint, auto_dismiss=False):
+        # 清空 Popup 的默认纹理背景，并为内容层提供明确的不透明底色。
+        if not hasattr(content, "theme_bg"):
+            self._add_rounded_background(content, COLOR_CARD_BG, INPUT_RADIUS)
+        return Popup(
+            title=title,
+            content=content,
+            size_hint=size_hint,
+            auto_dismiss=auto_dismiss,
+            background="",
+            background_color=COLOR_CARD_BG,
+            separator_color=COLOR_BORDER,
+            title_color=COLOR_TEXT,
+            title_size=sp(20)
+        )
 
     # =========================
     # UI
     # =========================
     def build_ui(self):
-        # 根布局：浅灰背景
+        # 根布局：主题页面背景
         root = BoxLayout(orientation="vertical")
         with root.canvas.before:
-            Color(0.94, 0.94, 0.94, 1)  # 浅灰
+            Color(*COLOR_PAGE_BG)
             root.bg = RoundedRectangle(radius=[0]*4, pos=root.pos, size=root.size)
 
         def update_root_bg(instance, value):
@@ -298,8 +365,8 @@ class MainScreen(Screen):
         scroll = ScrollView(size_hint=(1, 1))
         content = BoxLayout(
             orientation="vertical",
-            spacing=dp(16),
-            padding=[dp(16), dp(16), dp(16), dp(24)],
+            spacing=CARD_SPACING,
+            padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)],
             size_hint_y=None
         )
         content.bind(minimum_height=content.setter("height"))
@@ -309,20 +376,20 @@ class MainScreen(Screen):
         expense_card = self._make_card()
         expense_layout = BoxLayout(
             orientation="vertical",
-            padding=[dp(16), dp(24), dp(16), dp(16)],
-            spacing=dp(8),
+            padding=[CARD_PADDING, dp(16), CARD_PADDING, dp(14)],
+            spacing=dp(4),
             size_hint_y=None,
-            height=dp(150)
+            height=dp(132)
         )
 
-        expense_layout.add_widget(self._make_section_label("本月总支出", font_size=sp(18), height=dp(28)))
+        expense_layout.add_widget(self._make_section_label("本月总支出", font_size=sp(16), height=dp(24)))
 
         self.monthly_expense_label = Label(
             text="0.00 元",
             font_size=sp(34),
             size_hint_y=None,
-            height=dp(56),
-            color=(0.90, 0.30, 0.24, 1)
+            height=dp(58),
+            color=COLOR_PRIMARY
         )
         expense_layout.add_widget(self.monthly_expense_label)
 
@@ -332,7 +399,7 @@ class MainScreen(Screen):
             font_size=sp(16),
             size_hint_y=None,
             height=dp(24),
-            color=(0.4, 0.4, 0.4, 1)
+            color=COLOR_TEXT_SECONDARY
         )
         expense_layout.add_widget(self.record_count_label)
 
@@ -343,8 +410,8 @@ class MainScreen(Screen):
         form_card = self._make_card()
         form_layout = BoxLayout(
             orientation="vertical",
-            spacing=dp(12),
-            padding=[dp(16), dp(16), dp(16), dp(16)],
+            spacing=dp(10),
+            padding=[CARD_PADDING, CARD_PADDING, CARD_PADDING, CARD_PADDING],
             size_hint_y=None
         )
         form_layout.bind(minimum_height=form_layout.setter("height"))
@@ -373,7 +440,7 @@ class MainScreen(Screen):
         date_layout = GridLayout(cols=3, spacing=dp(10), size_hint_y=None, height=dp(82))
 
         year_box = BoxLayout(orientation="vertical", spacing=dp(4))
-        year_box.add_widget(Label(text="年", font_size=sp(16), size_hint_y=None, height=dp(24)))
+        year_box.add_widget(Label(text="年", color=COLOR_TEXT_SECONDARY, font_size=sp(15), size_hint_y=None, height=dp(24)))
         self.year_input = self._make_text_input(
             text=str(now.year),
             input_filter="int"
@@ -382,7 +449,7 @@ class MainScreen(Screen):
         date_layout.add_widget(year_box)
 
         month_box = BoxLayout(orientation="vertical", spacing=dp(4))
-        month_box.add_widget(Label(text="月", font_size=sp(16), size_hint_y=None, height=dp(24)))
+        month_box.add_widget(Label(text="月", color=COLOR_TEXT_SECONDARY, font_size=sp(15), size_hint_y=None, height=dp(24)))
         self.month_spinner = self._make_spinner(
             text=str(now.month),
             values=[str(i) for i in range(1, 13)]
@@ -391,7 +458,7 @@ class MainScreen(Screen):
         date_layout.add_widget(month_box)
 
         day_box = BoxLayout(orientation="vertical", spacing=dp(4))
-        day_box.add_widget(Label(text="日", font_size=sp(16), size_hint_y=None, height=dp(24)))
+        day_box.add_widget(Label(text="日", color=COLOR_TEXT_SECONDARY, font_size=sp(15), size_hint_y=None, height=dp(24)))
         self.day_spinner = self._make_spinner(
             text=str(now.day),
             values=[str(i) for i in range(1, 32)]
@@ -401,7 +468,7 @@ class MainScreen(Screen):
 
         form_layout.add_widget(date_layout)
 
-        record_btn = self._make_primary_button("记录账单", height=dp(52), font_size=sp(20))
+        record_btn = self._make_primary_button("记录账单", height=PRIMARY_BUTTON_HEIGHT, font_size=sp(19))
         record_btn.bind(on_press=self.record_bill)
         form_layout.add_widget(record_btn)
 
@@ -414,23 +481,24 @@ class MainScreen(Screen):
         button_grid = GridLayout(
             cols=2,
             spacing=dp(12),
-            padding=[dp(16), dp(16), dp(16), dp(16)],
+            padding=[CARD_PADDING, CARD_PADDING, CARD_PADDING, CARD_PADDING],
             size_hint_y=None
         )
         button_grid.bind(minimum_height=button_grid.setter("height"))
 
         buttons = [
-            ("本月统计", (0.35, 0.56, 0.75, 1), self.show_monthly_stats),
-            ("历史统计", (0.35, 0.56, 0.75, 1), self.show_history_stats),
-            ("分类设置", (0.35, 0.56, 0.75, 1), self.show_categories),
-            ("导出数据", (0.35, 0.56, 0.75, 1), self.export_data),
-            ("查看记录", (0.35, 0.56, 0.75, 1), self.show_records),
-            ("删除记录", (0.80, 0.30, 0.25, 1), self.delete_records),
-            ("导入数据", (0.35, 0.56, 0.75, 1), self.import_data_popup),
+            ("本月统计", self.show_monthly_stats, False),
+            ("历史统计", self.show_history_stats, False),
+            ("分类设置", self.show_categories, False),
+            ("导出数据", self.export_data, False),
+            ("查看记录", self.show_records, False),
+            ("删除记录", self.delete_records, True),
+            ("导入数据", self.import_data_popup, False),
         ]
 
-        for text, color, callback in buttons:
-            btn = self._make_action_button(text, color, height=dp(48), font_size=sp(17))
+        for text, callback, is_danger in buttons:
+            factory = self._make_danger_button if is_danger else self._make_secondary_button
+            btn = factory(text, height=CONTROL_HEIGHT, font_size=sp(16))
             btn.bind(on_press=callback)
             button_grid.add_widget(btn)
 
@@ -607,17 +675,13 @@ class MainScreen(Screen):
             height=dp(26),
             halign="left",
             valign="middle",
-            color=(0.12, 0.22, 0.36, 1)
+            color=COLOR_TEXT
         )
         type_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         content.add_widget(type_label)
 
-        type_spinner = Spinner(
-            text="按月统计" if months else "按年统计",
-            values=("按月统计", "按年统计"),
-            size_hint_y=None,
-            height=dp(48),
-            font_size=sp(18)
+        type_spinner = self._make_spinner(
+            "按月统计" if months else "按年统计", ("按月统计", "按年统计")
         )
         content.add_widget(type_spinner)
 
@@ -628,25 +692,21 @@ class MainScreen(Screen):
             height=dp(26),
             halign="left",
             valign="middle",
-            color=(0.12, 0.22, 0.36, 1)
+            color=COLOR_TEXT
         )
         period_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         content.add_widget(period_label)
 
         initial_periods = months if type_spinner.text == "按月统计" else years
-        period_spinner = Spinner(
-            text=initial_periods[0] if initial_periods else "",
-            values=initial_periods,
-            size_hint_y=None,
-            height=dp(48),
-            font_size=sp(18)
+        period_spinner = self._make_spinner(
+            initial_periods[0] if initial_periods else "", initial_periods
         )
         content.add_widget(period_spinner)
 
-        btn_view = Button(text="查看统计", size_hint_y=None, height=dp(46), font_size=sp(18))
-        btn_close = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
+        btn_view = self._make_primary_button("查看统计")
+        btn_close = self._make_text_button("关闭")
 
-        popup = Popup(title="历史统计", content=content, size_hint=(0.90, 0.52), auto_dismiss=False)
+        popup = self._make_popup("历史统计", content, (0.90, 0.56))
 
         def update_periods(spinner, text):
             periods = months if text == "按月统计" else years
@@ -773,7 +833,7 @@ class MainScreen(Screen):
             height=dp(46),
             halign="left",
             valign="middle",
-            color=(0.12, 0.12, 0.12, 1)
+            color=COLOR_TEXT
         )
         category_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         row.add_widget(category_label)
@@ -787,7 +847,7 @@ class MainScreen(Screen):
             height=dp(46),
             halign="right",
             valign="middle",
-            color=(0.12, 0.12, 0.12, 1)
+            color=COLOR_TEXT
         )
         amount_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         row.add_widget(amount_label)
@@ -805,14 +865,14 @@ class MainScreen(Screen):
                 empty_text,
                 sp(17),
                 dp(110),
-                (0.45, 0.45, 0.45, 1)
+                COLOR_TEXT_SECONDARY
             ))
 
         section.add_widget(self._make_stats_label(
             "分类明细",
             sp(17),
             dp(28),
-            (0.12, 0.22, 0.36, 1),
+            COLOR_TEXT,
             halign="left"
         ))
 
@@ -826,7 +886,7 @@ class MainScreen(Screen):
                 empty_text,
                 sp(16),
                 dp(52),
-                (0.45, 0.45, 0.45, 1)
+                COLOR_TEXT_SECONDARY
             ))
         return section
 
@@ -839,7 +899,7 @@ class MainScreen(Screen):
             height=dp(38),
             halign="left",
             valign="middle",
-            color=(0.12, 0.12, 0.12, 1)
+            color=COLOR_TEXT
         )
         month_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         row.add_widget(month_label)
@@ -851,7 +911,7 @@ class MainScreen(Screen):
             height=dp(38),
             halign="right",
             valign="middle",
-            color=(0.12, 0.12, 0.12, 1)
+            color=COLOR_TEXT
         )
         amount_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         row.add_widget(amount_label)
@@ -864,7 +924,7 @@ class MainScreen(Screen):
             "1月至12月支出明细",
             sp(17),
             dp(30),
-            (0.12, 0.22, 0.36, 1),
+            COLOR_TEXT,
             halign="left"
         ))
         for month in range(1, 13):
@@ -906,13 +966,13 @@ class MainScreen(Screen):
             title_text,
             sp(20),
             dp(34),
-            (0.12, 0.22, 0.36, 1)
+            COLOR_TEXT
         ))
         content.add_widget(self._make_stats_label(
             total_text,
             sp(18),
             dp(32),
-            (0.18, 0.45, 0.25, 1)
+            COLOR_SUCCESS
         ))
 
         scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
@@ -926,10 +986,10 @@ class MainScreen(Screen):
         scroll.add_widget(scroll_content)
         content.add_widget(scroll)
 
-        btn_close = Button(text="关闭", size_hint_y=None, height=dp(44), font_size=sp(17))
+        btn_close = self._make_text_button("关闭")
         content.add_widget(btn_close)
 
-        popup = Popup(title=popup_title, content=content, size_hint=(0.94, 0.90), auto_dismiss=False)
+        popup = self._make_popup(popup_title, content, (0.94, 0.90))
         btn_close.bind(on_press=popup.dismiss)
         popup.open()
 
@@ -945,16 +1005,10 @@ class MainScreen(Screen):
 
         for category in self.categories:
             row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
-            row.add_widget(Label(text=category, font_size=sp(17), halign="left", valign="middle"))
+            row.add_widget(Label(text=category, color=COLOR_TEXT, font_size=sp(17), halign="left", valign="middle"))
 
-            delete_btn = Button(
-                text="删除",
-                size_hint=(0.28, 1),
-                font_size=sp(16),
-                background_normal="",
-                background_color=(0.80, 0.30, 0.25, 1),
-                color=(1, 1, 1, 1)
-            )
+            delete_btn = self._make_danger_button("删除", font_size=sp(16))
+            delete_btn.size_hint = (0.28, 1)
             delete_btn.bind(on_press=lambda btn, cat=category: self.delete_category(cat))
             row.add_widget(delete_btn)
 
@@ -963,37 +1017,17 @@ class MainScreen(Screen):
         scroll.add_widget(grid)
         content.add_widget(scroll)
 
-        self.new_category_input = TextInput(
-            hint_text="输入新分类",
-            multiline=False,
-            size_hint_y=None,
-            height=dp(46),
-            font_size=sp(18),
-            background_normal="",
-            background_active="",
-            background_color=(0.96, 0.96, 0.96, 1),
-            foreground_color=(0, 0, 0, 1),
-            cursor_color=(0, 0, 0, 1),
-            padding=[dp(10), dp(10), dp(10), dp(10)]
-        )
+        self.new_category_input = self._make_text_input(hint_text="输入新分类")
         content.add_widget(self.new_category_input)
 
-        add_btn = Button(
-            text="添加分类",
-            size_hint_y=None,
-            height=dp(46),
-            font_size=sp(18),
-            background_normal="",
-            background_color=(0.20, 0.60, 0.35, 1),
-            color=(1, 1, 1, 1)
-        )
+        add_btn = self._make_primary_button("添加分类")
         add_btn.bind(on_press=self.add_category)
         content.add_widget(add_btn)
 
-        close_btn = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
+        close_btn = self._make_text_button("关闭")
         content.add_widget(close_btn)
 
-        popup = Popup(title="分类设置", content=content, size_hint=(0.9, 0.9), auto_dismiss=False)
+        popup = self._make_popup("分类设置", content, (0.9, 0.9))
         close_btn.bind(on_press=popup.dismiss)
         popup.open()
 
@@ -1059,7 +1093,8 @@ class MainScreen(Screen):
                 size_hint_y=None,
                 height=dp(62),
                 halign="left",
-                valign="middle"
+                valign="middle",
+                color=COLOR_TEXT
             )
             row.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(10), None)))
             grid.add_widget(row)
@@ -1067,15 +1102,10 @@ class MainScreen(Screen):
         scroll.add_widget(grid)
         content.add_widget(scroll)
 
-        close_btn = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
+        close_btn = self._make_text_button("关闭")
         content.add_widget(close_btn)
 
-        popup = Popup(
-            title="查看记录（最近50条）",
-            content=content,
-            size_hint=(0.92, 0.9),
-            auto_dismiss=False
-        )
+        popup = self._make_popup("查看记录（最近50条）", content, (0.92, 0.9))
         close_btn.bind(on_press=popup.dismiss)
         popup.open()
 
@@ -1109,19 +1139,14 @@ class MainScreen(Screen):
                 font_size=sp(15),
                 size_hint=(0.72, 1),
                 halign="left",
-                valign="middle"
+                valign="middle",
+                color=COLOR_TEXT
             )
             info_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(6), None)))
             row.add_widget(info_label)
 
-            delete_btn = Button(
-                text="删除",
-                font_size=sp(16),
-                size_hint=(0.28, 1),
-                background_normal="",
-                background_color=(0.80, 0.30, 0.25, 1),
-                color=(1, 1, 1, 1)
-            )
+            delete_btn = self._make_danger_button("删除", font_size=sp(16))
+            delete_btn.size_hint = (0.28, 1)
             delete_btn.bind(on_press=lambda btn, idx=real_index: self.delete_single_record(idx))
             row.add_widget(delete_btn)
 
@@ -1130,27 +1155,14 @@ class MainScreen(Screen):
         scroll.add_widget(grid)
         content.add_widget(scroll)
 
-        clear_btn = Button(
-            text="清空所有记录",
-            size_hint_y=None,
-            height=dp(44),
-            font_size=sp(17),
-            background_normal="",
-            background_color=(0.80, 0.30, 0.25, 1),
-            color=(1, 1, 1, 1)
-        )
+        clear_btn = self._make_danger_button("清空所有记录")
         clear_btn.bind(on_press=self.clear_all_records)
         content.add_widget(clear_btn)
 
-        close_btn = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
+        close_btn = self._make_text_button("关闭")
         content.add_widget(close_btn)
 
-        popup = Popup(
-            title="删除记录（最近20条）",
-            content=content,
-            size_hint=(0.92, 0.9),
-            auto_dismiss=False
-        )
+        popup = self._make_popup("删除记录（最近20条）", content, (0.92, 0.9))
         close_btn.bind(on_press=popup.dismiss)
         popup.open()
 
@@ -1180,12 +1192,12 @@ class MainScreen(Screen):
 
         content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
 
-        btn_xlsx = Button(text="导出为 Excel", size_hint_y=None, height=dp(48), font_size=sp(18))
-        btn_csv = Button(text="导出为 CSV", size_hint_y=None, height=dp(48), font_size=sp(18))
-        btn_json = Button(text="导出为 JSON", size_hint_y=None, height=dp(48), font_size=sp(18))
-        btn_close = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
+        btn_xlsx = self._make_secondary_button("导出为 Excel")
+        btn_csv = self._make_secondary_button("导出为 CSV")
+        btn_json = self._make_secondary_button("导出为 JSON")
+        btn_close = self._make_text_button("关闭")
 
-        popup = Popup(title="导出数据", content=content, size_hint=(0.86, 0.48), auto_dismiss=False)
+        popup = self._make_popup("导出数据", content, (0.86, 0.54))
 
         btn_xlsx.bind(on_press=lambda btn: self.export_to_excel(popup))
         btn_csv.bind(on_press=lambda btn: self.export_to_csv(popup))
@@ -1506,13 +1518,15 @@ class MainScreen(Screen):
         content.add_widget(chooser)
 
         btn_box = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(10))
-        btn_import = Button(text="导入", font_size=sp(17))
-        btn_cancel = Button(text="取消", font_size=sp(17))
+        btn_import = self._make_primary_button("导入")
+        btn_import.size_hint_y = 1
+        btn_cancel = self._make_text_button("取消")
+        btn_cancel.size_hint_y = 1
         btn_box.add_widget(btn_import)
         btn_box.add_widget(btn_cancel)
         content.add_widget(btn_box)
 
-        popup = Popup(title="选择要导入的数据文件", content=content, size_hint=(0.94, 0.92), auto_dismiss=False)
+        popup = self._make_popup("选择要导入的数据文件", content, (0.94, 0.92))
 
         def do_import(btn):
             if not chooser.selection:
@@ -1839,44 +1853,61 @@ class MainScreen(Screen):
     # 通用弹窗
     # =========================
     def show_popup(self, title, message):
-        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
+        content = BoxLayout(orientation="vertical", spacing=CARD_SPACING, padding=CARD_PADDING)
+
+        if "成功" in title or "导入完成" in title:
+            status_color = COLOR_SUCCESS
+            status_background = COLOR_SUCCESS_LIGHT
+        elif "错误" in title or "失败" in title:
+            status_color = COLOR_DANGER
+            status_background = COLOR_DANGER_LIGHT
+        else:
+            status_color = COLOR_PRIMARY
+            status_background = COLOR_PRIMARY_LIGHT
+
+        self._add_rounded_background(content, status_background, INPUT_RADIUS)
 
         msg = Label(
             text=message,
             font_size=sp(17),
             halign="center",
-            valign="middle"
+            valign="middle",
+            color=status_color
         )
         msg.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(8), None)))
         content.add_widget(msg)
 
-        btn = Button(text="确定", size_hint_y=None, height=dp(42), font_size=sp(17))
+        btn = self._make_button("确定", status_color, COLOR_WHITE)
         content.add_widget(btn)
 
-        popup = Popup(title=title, content=content, size_hint=(0.86, 0.42), auto_dismiss=False)
+        popup = self._make_popup(title, content, (0.88, 0.42))
         btn.bind(on_press=popup.dismiss)
         popup.open()
 
     def show_confirm_popup(self, title, message, confirm_callback):
-        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
+        content = BoxLayout(orientation="vertical", spacing=CARD_SPACING, padding=CARD_PADDING)
 
         msg = Label(
             text=message,
             font_size=sp(17),
             halign="center",
-            valign="middle"
+            valign="middle",
+            color=COLOR_TEXT
         )
         msg.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(8), None)))
         content.add_widget(msg)
 
-        btn_box = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(10))
-        btn_ok = Button(text="确定", font_size=sp(17))
-        btn_cancel = Button(text="取消", font_size=sp(17))
+        btn_box = BoxLayout(size_hint_y=None, height=CONTROL_HEIGHT, spacing=dp(10))
+        is_danger = "删除" in title or "清空" in title
+        btn_ok = (self._make_danger_button if is_danger else self._make_primary_button)("确定")
+        btn_ok.size_hint_y = 1
+        btn_cancel = self._make_text_button("取消")
+        btn_cancel.size_hint_y = 1
         btn_box.add_widget(btn_ok)
         btn_box.add_widget(btn_cancel)
         content.add_widget(btn_box)
 
-        popup = Popup(title=title, content=content, size_hint=(0.86, 0.42), auto_dismiss=False)
+        popup = self._make_popup(title, content, (0.88, 0.42))
 
         def do_confirm(btn):
             popup.dismiss()
