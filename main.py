@@ -43,7 +43,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner, SpinnerOption
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
-from kivy.graphics import Color, Ellipse, RoundedRectangle
+from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
 from kivy.clock import Clock
 
 from openpyxl import Workbook, load_workbook
@@ -305,9 +305,10 @@ class MainScreen(Screen):
             font_size=font_size,
             background_normal="",
             background_active="",
-            background_color=COLOR_TRANSPARENT,
+            background_color=COLOR_WHITE,
             foreground_color=COLOR_TEXT,
             cursor_color=COLOR_PRIMARY,
+            selection_color=(0.145, 0.388, 0.922, 0.35),
             hint_text_color=COLOR_TEXT_SECONDARY,
             padding=[dp(12), dp(12), dp(12), dp(10)],
             disabled=False,
@@ -315,7 +316,26 @@ class MainScreen(Screen):
             write_tab=False,
             **kwargs
         )
-        return self._add_rounded_background(ti, COLOR_CARD_BG, INPUT_RADIUS, COLOR_BORDER)
+        # TextInput 自身绘制不透明白色背景；自定义 Canvas 只绘制边框，
+        # 避免部分 Android 设备上填充图形覆盖输入文字的纹理。
+        with ti.canvas.after:
+            Color(*COLOR_BORDER)
+            ti.input_border = Line(
+                rounded_rectangle=(ti.x, ti.y, ti.width, ti.height, INPUT_RADIUS),
+                width=dp(1)
+            )
+
+        def update_input_border(instance, value):
+            instance.input_border.rounded_rectangle = (
+                instance.x,
+                instance.y,
+                instance.width,
+                instance.height,
+                INPUT_RADIUS
+            )
+
+        ti.bind(pos=update_input_border, size=update_input_border)
+        return ti
 
     def _make_spinner(self, text, values, height=CONTROL_HEIGHT, font_size=sp(17)):
         spinner = Spinner(
@@ -1124,9 +1144,33 @@ class MainScreen(Screen):
         grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         grid.bind(minimum_height=grid.setter("height"))
 
-        display_records = list(enumerate(self.records[:20]))
+        self._delete_records_grid = grid
 
-        for real_index, record in display_records:
+        scroll.add_widget(grid)
+        content.add_widget(scroll)
+
+        clear_btn = self._make_danger_button("清空所有记录")
+        clear_btn.bind(on_press=self.clear_all_records)
+        content.add_widget(clear_btn)
+
+        close_btn = self._make_text_button("关闭")
+        content.add_widget(close_btn)
+
+        popup = self._make_popup("删除记录（最近20条）", content, (0.92, 0.9))
+        self._delete_records_popup = popup
+        close_btn.bind(on_press=popup.dismiss)
+        popup.bind(on_dismiss=self._clear_delete_records_popup)
+        self._rebuild_delete_records_grid()
+        popup.open()
+
+    def _rebuild_delete_records_grid(self):
+        """根据当前记录重建删除窗口，始终只展示最近 20 条。"""
+        grid = getattr(self, "_delete_records_grid", None)
+        if grid is None:
+            return
+
+        grid.clear_widgets()
+        for record in self.records[:20]:
             row = BoxLayout(size_hint_y=None, height=dp(68), spacing=dp(8))
 
             record_text = (
@@ -1147,37 +1191,39 @@ class MainScreen(Screen):
 
             delete_btn = self._make_danger_button("删除", font_size=sp(16))
             delete_btn.size_hint = (0.28, 1)
-            delete_btn.bind(on_press=lambda btn, idx=real_index: self.delete_single_record(idx))
+            delete_btn.bind(on_press=lambda btn, item=record: self.delete_single_record(item))
             row.add_widget(delete_btn)
 
             grid.add_widget(row)
 
-        scroll.add_widget(grid)
-        content.add_widget(scroll)
+    def _clear_delete_records_popup(self, instance):
+        if getattr(self, "_delete_records_popup", None) is instance:
+            self._delete_records_popup = None
+            self._delete_records_grid = None
 
-        clear_btn = self._make_danger_button("清空所有记录")
-        clear_btn.bind(on_press=self.clear_all_records)
-        content.add_widget(clear_btn)
-
-        close_btn = self._make_text_button("关闭")
-        content.add_widget(close_btn)
-
-        popup = self._make_popup("删除记录（最近20条）", content, (0.92, 0.9))
-        close_btn.bind(on_press=popup.dismiss)
-        popup.open()
-
-    def delete_single_record(self, index):
-        if 0 <= index < len(self.records):
-            del self.records[index]
-            self.save_data()
-            self.update_monthly_expense()
-            self.show_popup("成功", "记录已删除。")
+    def delete_single_record(self, record):
+        # 使用对象身份而非旧索引，避免窗口内连续删除时删错记录。
+        for index, current_record in enumerate(self.records):
+            if current_record is record:
+                del self.records[index]
+                self.save_data()
+                self.update_monthly_expense()
+                if self.records:
+                    self._rebuild_delete_records_grid()
+                else:
+                    popup = getattr(self, "_delete_records_popup", None)
+                    if popup is not None:
+                        popup.dismiss()
+                return
 
     def clear_all_records(self, instance):
         def do_clear(btn):
             self.records = []
             self.save_data()
             self.update_monthly_expense()
+            popup = getattr(self, "_delete_records_popup", None)
+            if popup is not None:
+                popup.dismiss()
             self.show_popup("成功", "所有记录已清空。")
 
         self.show_confirm_popup("确认清空", "确定要清空所有记录吗？此操作不可撤销。", do_clear)
