@@ -271,7 +271,7 @@ class MainScreen(Screen):
             if border_color is not None:
                 Color(*border_color)
                 widget.theme_border = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius] * 4)
-            Color(*color)
+            widget.theme_bg_color = Color(*color)
             inset = dp(1) if border_color is not None else 0
             widget.theme_bg = RoundedRectangle(
                 pos=(widget.x + inset, widget.y + inset),
@@ -594,19 +594,33 @@ class MainScreen(Screen):
             padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
         )
         content.add_widget(self._make_page_header("统计"))
-        card = self._make_card()
-        actions = BoxLayout(
-            orientation="vertical", spacing=dp(12), padding=[CARD_PADDING] * 4, size_hint_y=None
+
+        controls_card = self._make_card()
+        controls = BoxLayout(
+            orientation="vertical", spacing=dp(10), padding=[CARD_PADDING] * 4, size_hint_y=None
         )
-        actions.bind(minimum_height=actions.setter("height"))
-        monthly_btn = self._make_secondary_button("本月统计")
-        monthly_btn.bind(on_press=self.show_monthly_stats)
-        history_btn = self._make_secondary_button("历史统计")
-        history_btn.bind(on_press=self.show_history_stats)
-        actions.add_widget(monthly_btn)
-        actions.add_widget(history_btn)
-        card.add_widget(actions)
-        content.add_widget(card)
+        controls.bind(minimum_height=controls.setter("height"))
+        controls.add_widget(self._make_section_label("统计类型", font_size=sp(16), height=dp(26)))
+        mode_selector = BoxLayout(size_hint_y=None, height=CONTROL_HEIGHT, spacing=dp(8))
+        self.stats_month_button = self._make_primary_button("月度", height=CONTROL_HEIGHT, font_size=sp(16))
+        self.stats_year_button = self._make_text_button("年度", height=CONTROL_HEIGHT, font_size=sp(16))
+        self.stats_month_button.bind(on_press=lambda instance: self._set_stats_mode("month"))
+        self.stats_year_button.bind(on_press=lambda instance: self._set_stats_mode("year"))
+        mode_selector.add_widget(self.stats_month_button)
+        mode_selector.add_widget(self.stats_year_button)
+        controls.add_widget(mode_selector)
+        controls.add_widget(self._make_section_label("统计周期", font_size=sp(16), height=dp(26)))
+        self.stats_period_spinner = self._make_spinner("", ())
+        self.stats_period_spinner.bind(text=self._on_stats_period_changed)
+        controls.add_widget(self.stats_period_spinner)
+        controls_card.add_widget(controls)
+        content.add_widget(controls_card)
+
+        self.stats_mode = "month"
+        self._updating_stats_period = False
+        self.stats_results = BoxLayout(orientation="vertical", spacing=CARD_SPACING, size_hint_y=None)
+        self.stats_results.bind(minimum_height=self.stats_results.setter("height"))
+        content.add_widget(self.stats_results)
         page.add_widget(self._make_page_scroll(content))
         page.add_widget(self._make_bottom_navigation("stats"))
         screen.add_widget(page)
@@ -651,6 +665,8 @@ class MainScreen(Screen):
         """仅切换视图；所有页面继续使用当前 MainScreen 的共享数据。"""
         if page_name == "records":
             self.refresh_records_page()
+        elif page_name == "stats":
+            self.refresh_stats_page()
         self.page_manager.current = page_name
 
     def refresh_records_page(self):
@@ -899,6 +915,96 @@ class MainScreen(Screen):
     # =========================
     # 统计
     # =========================
+    def _set_stats_mode(self, mode):
+        """切换页面内统计类型，并立即显示该类型的当前周期。"""
+        if mode not in ("month", "year"):
+            return
+        self.stats_mode = mode
+        month_selected = mode == "month"
+        self.stats_month_button.theme_bg_color.rgba = (
+            COLOR_PRIMARY if month_selected else COLOR_CARD_BG
+        )
+        self.stats_month_button.color = COLOR_WHITE if month_selected else COLOR_TEXT_SECONDARY
+        self.stats_year_button.theme_bg_color.rgba = (
+            COLOR_CARD_BG if month_selected else COLOR_PRIMARY
+        )
+        self.stats_year_button.color = COLOR_TEXT_SECONDARY if month_selected else COLOR_WHITE
+        self.refresh_stats_page(reset_period=True)
+
+    def _on_stats_period_changed(self, spinner, period):
+        """Spinner 的唯一绑定入口，避免刷新选项时重复触发重建。"""
+        if not self._updating_stats_period and period:
+            self.refresh_stats_page()
+
+    def _get_stats_periods(self):
+        """在既有周期提取结果前补充当前周期，且保持历史周期倒序。"""
+        if self.stats_mode == "year":
+            current = datetime.now().strftime("%Y")
+            available = self.get_available_years()
+        else:
+            current = datetime.now().strftime("%Y-%m")
+            available = self.get_available_months()
+        return [current] + [period for period in available if period != current]
+
+    def _build_stats_summary_card(self, period, total, record_count):
+        card = self._make_card()
+        summary = BoxLayout(
+            orientation="vertical", spacing=dp(4), padding=[CARD_PADDING] * 4,
+            size_hint_y=None, height=dp(142)
+        )
+        period_suffix = "年度统计" if self.stats_mode == "year" else "月度统计"
+        summary.add_widget(self._make_stats_label(
+            f"{period}  {period_suffix}", sp(15), dp(24), COLOR_TEXT_SECONDARY, halign="left"
+        ))
+        summary.add_widget(self._make_stats_label(
+            f"{total:.2f} 元", sp(32), dp(58), COLOR_PRIMARY, halign="left"
+        ))
+        summary.add_widget(self._make_stats_label(
+            f"有效记录：{record_count} 条", sp(15), dp(24), COLOR_TEXT_SECONDARY, halign="left"
+        ))
+        card.add_widget(summary)
+        return card
+
+    def refresh_stats_page(self, reset_period=False):
+        """用共享数据重建统计结果；页面控件本身始终只创建一次。"""
+        periods = self._get_stats_periods()
+        current_period = datetime.now().strftime("%Y" if self.stats_mode == "year" else "%Y-%m")
+        selected_period = self.stats_period_spinner.text
+        if reset_period or selected_period not in periods:
+            selected_period = current_period
+
+        self._updating_stats_period = True
+        self.stats_period_spinner.values = periods
+        self.stats_period_spinner.text = selected_period
+        self._updating_stats_period = False
+
+        self.stats_results.clear_widgets()
+        if self.stats_mode == "year":
+            records = self.get_records_for_year(selected_period)
+            empty_text = "暂无本年度消费记录"
+        else:
+            records = self.get_records_for_month(selected_period)
+            empty_text = "暂无本月消费记录"
+
+        category_stats = self.get_category_stats(records)
+        total = sum(amount for category, amount in category_stats)
+        valid_record_count = sum(1 for record in records if self._get_record_amount(record) is not None)
+        self.stats_results.add_widget(
+            self._build_stats_summary_card(selected_period, total, valid_record_count)
+        )
+
+        details_card = self._make_card()
+        details = BoxLayout(
+            orientation="vertical", spacing=dp(12), padding=[CARD_PADDING] * 4, size_hint_y=None
+        )
+        details.bind(minimum_height=details.setter("height"))
+        details.add_widget(self._build_category_stats_section(category_stats, total, empty_text))
+        if self.stats_mode == "year":
+            monthly_totals = self.get_monthly_totals_for_year(selected_period)
+            details.add_widget(self._build_year_monthly_totals_section(monthly_totals))
+        details_card.add_widget(details)
+        self.stats_results.add_widget(details_card)
+
     def show_monthly_stats(self, instance):
         current_month = datetime.now().strftime("%Y-%m")
         self.show_monthly_stats_popup(current_month)
