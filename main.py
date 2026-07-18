@@ -5,7 +5,7 @@ import csv
 from datetime import datetime
 
 from kivy.config import Config
-from kivy.utils import platform
+from kivy.utils import escape_markup, platform
 
 # =========================
 # 字体设置
@@ -33,6 +33,7 @@ from kivy.app import App
 from kivy.core.window import Window
 from kivy.metrics import dp, sp
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.button import Button
 from kivy.uix.filechooser import FileChooserListView
 from kivy.uix.gridlayout import GridLayout
@@ -115,6 +116,61 @@ class ThemedSpinnerOption(SpinnerOption):
             instance.option_bg.size = instance.size
 
         self.bind(pos=update_background, size=update_background)
+
+
+class RecordRow(ButtonBehavior, BoxLayout):
+    """明细页中可直接点击的记录卡片。"""
+    def __init__(self, record, on_open, **kwargs):
+        super().__init__(
+            orientation="horizontal", spacing=dp(12), padding=[dp(14), dp(10)],
+            size_hint_y=None, height=dp(76), **kwargs
+        )
+        self.record = record
+        with self.canvas.before:
+            Color(*COLOR_BORDER)
+            self.row_border = RoundedRectangle(pos=self.pos, size=self.size, radius=[BUTTON_RADIUS] * 4)
+            Color(*COLOR_CARD_BG)
+            self.row_bg = RoundedRectangle(
+                pos=(self.x + dp(1), self.y + dp(1)),
+                size=(max(0, self.width - dp(2)), max(0, self.height - dp(2))),
+                radius=[BUTTON_RADIUS - dp(1)] * 4
+            )
+
+        def update_canvas(instance, value):
+            instance.row_border.pos = instance.pos
+            instance.row_border.size = instance.size
+            instance.row_bg.pos = (instance.x + dp(1), instance.y + dp(1))
+            instance.row_bg.size = (max(0, instance.width - dp(2)), max(0, instance.height - dp(2)))
+
+        self.bind(pos=update_canvas, size=update_canvas)
+        self.bind(on_release=lambda instance: on_open(self.record))
+
+        text_box = BoxLayout(orientation="vertical", spacing=dp(2))
+        meta = Label(
+            text=f"{record.get('日期', '')}  ·  {record.get('分类', '')}",
+            color=COLOR_TEXT_SECONDARY, font_size=sp(13), halign="left", valign="middle",
+            size_hint_y=None, height=dp(22)
+        )
+        meta.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        note = Label(
+            text=str(record.get("姓名/备注", "")), color=COLOR_TEXT, font_size=sp(16),
+            halign="left", valign="middle", shorten=True, shorten_from="right", max_lines=1
+        )
+        note.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
+        text_box.add_widget(meta)
+        text_box.add_widget(note)
+        self.add_widget(text_box)
+
+        try:
+            amount_text = f"{float(record.get('金额', 0)):.2f} 元"
+        except (TypeError, ValueError):
+            amount_text = f"{record.get('金额', '')} 元"
+        amount = Label(
+            text=amount_text, color=COLOR_PRIMARY, font_size=sp(17), bold=True,
+            halign="right", valign="middle", size_hint_x=None, width=dp(112)
+        )
+        amount.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        self.add_widget(amount)
 
 
 class CategoryPieChart(Widget):
@@ -572,7 +628,6 @@ class MainScreen(Screen):
                 ("导出数据", self.export_data, False),
             )),
             ("危险操作", (
-                ("删除记录", self.delete_records, True),
                 ("清空所有记录", self.clear_all_records, True),
             )),
         )
@@ -603,27 +658,90 @@ class MainScreen(Screen):
         self.sort_records()
         self.records_list.clear_widgets()
         if not self.records:
-            self.records_list.add_widget(Label(
-                text="暂无记录", color=COLOR_TEXT_SECONDARY,
-                size_hint_y=None, height=dp(72), font_size=sp(16)
+            empty = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(164))
+            empty.add_widget(Label(
+                text="暂无记录", color=COLOR_TEXT, size_hint_y=None,
+                height=dp(40), font_size=sp(20), bold=True
             ))
+            empty.add_widget(Label(
+                text="记一笔消费后会显示在这里", color=COLOR_TEXT_SECONDARY,
+                size_hint_y=None, height=dp(36), font_size=sp(15)
+            ))
+            go_accounting = self._make_secondary_button("去记账")
+            go_accounting.bind(on_press=lambda instance: self.switch_page("accounting"))
+            empty.add_widget(go_accounting)
+            self.records_list.add_widget(empty)
             return
         for record in self.records[:50]:
-            row = BoxLayout(size_hint_y=None, height=dp(68), spacing=dp(10))
-            info = Label(
-                text=f"{record.get('日期', '')}  {record.get('分类', '')}\n{record.get('姓名/备注', '')}",
-                color=COLOR_TEXT, font_size=sp(15), halign="left", valign="middle"
+            self.records_list.add_widget(RecordRow(record, self.show_record_detail))
+
+    def show_record_detail(self, record):
+        """显示完整记录，并从当前记录对象发起安全的单条删除流程。"""
+        content = BoxLayout(orientation="vertical", spacing=dp(12), padding=CARD_PADDING)
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
+        details = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+        details.bind(minimum_height=details.setter("height"))
+        fields = [
+            ("消费备注", str(record.get("姓名/备注", ""))),
+            ("分类", str(record.get("分类", ""))),
+            ("金额", self._format_record_amount(record)),
+            ("日期", str(record.get("日期", ""))),
+        ]
+        record_time = str(record.get("记录时间", "")).strip()
+        if record_time:
+            fields.append(("记录时间", record_time))
+
+        for field_name, value in fields:
+            label = Label(
+                text=f"[color=6B7280]{field_name}[/color]\n{escape_markup(value)}", markup=True,
+                color=COLOR_TEXT, font_size=sp(16), halign="left", valign="middle",
+                size_hint_y=None, height=dp(58)
             )
-            info.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
-            amount = Label(
-                text=f"{float(record.get('金额', 0)):.2f} 元", color=COLOR_PRIMARY,
-                font_size=sp(17), bold=True, halign="right", valign="middle",
-                size_hint_x=None, width=dp(112)
-            )
-            amount.bind(size=lambda inst, val: setattr(inst, "text_size", val))
-            row.add_widget(info)
-            row.add_widget(amount)
-            self.records_list.add_widget(row)
+            label.bind(width=lambda inst, val: setattr(inst, "text_size", (val, None)))
+            label.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(58), val[1] + dp(8))))
+            details.add_widget(label)
+        scroll.add_widget(details)
+        content.add_widget(scroll)
+
+        buttons = BoxLayout(size_hint_y=None, height=CONTROL_HEIGHT, spacing=dp(10))
+        close_button = self._make_text_button("关闭")
+        delete_button = self._make_danger_button("删除记录")
+        buttons.add_widget(close_button)
+        buttons.add_widget(delete_button)
+        content.add_widget(buttons)
+
+        detail_popup = self._make_popup("记录详情", content, (0.9, 0.72))
+        close_button.bind(on_press=detail_popup.dismiss)
+        delete_button.bind(
+            on_press=lambda instance: self.confirm_record_deletion(record, detail_popup)
+        )
+        detail_popup.open()
+
+    def _format_record_amount(self, record):
+        try:
+            return f"{float(record.get('金额', 0)):.2f} 元"
+        except (TypeError, ValueError):
+            return f"{record.get('金额', '')} 元"
+
+    def confirm_record_deletion(self, record, detail_popup):
+        """二次确认后按对象身份删除，避免连续操作使用过期索引。"""
+        def do_delete(instance):
+            for index, current_record in enumerate(self.records):
+                if current_record is record:
+                    del self.records[index]
+                    self.save_data()
+                    self.update_monthly_expense()
+                    detail_popup.dismiss()
+                    self.refresh_records_page()
+                    return
+
+            detail_popup.dismiss()
+            self.show_popup("提示", "这条记录已不存在。")
+            self.refresh_records_page()
+
+        self.show_confirm_popup(
+            "确认删除", "确定要删除这条记录吗？此操作不可撤销。", do_delete
+        )
 
     def _handle_back_key(self, window, key, *args):
         if key == 27 and getattr(self, "page_manager", None) is not None:
