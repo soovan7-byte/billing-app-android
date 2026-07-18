@@ -371,163 +371,270 @@ class MainScreen(Screen):
     # UI
     # =========================
     def build_ui(self):
-        # 根布局：主题页面背景
+        """构建共享同一业务状态的四页移动端导航骨架。"""
         root = BoxLayout(orientation="vertical")
         with root.canvas.before:
             Color(*COLOR_PAGE_BG)
-            root.bg = RoundedRectangle(radius=[0]*4, pos=root.pos, size=root.size)
+            root.bg = RoundedRectangle(radius=[0] * 4, pos=root.pos, size=root.size)
 
         def update_root_bg(instance, value):
             instance.bg.pos = instance.pos
             instance.bg.size = instance.size
+
         root.bind(pos=update_root_bg, size=update_root_bg)
+        self.page_manager = ScreenManager()
+        self._nav_buttons = {}
+        self.page_manager.add_widget(self._build_accounting_screen())
+        self.page_manager.add_widget(self._build_records_screen())
+        self.page_manager.add_widget(self._build_stats_screen())
+        self.page_manager.add_widget(self._build_settings_screen())
+        root.add_widget(self.page_manager)
+        self.add_widget(root)
+        Window.bind(on_keyboard=self._handle_back_key)
+        self.bind(parent=self._unbind_window_keyboard)
+        self.switch_page("accounting")
 
+    def _make_page_header(self, title, action_text=None, action_callback=None):
+        header = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
+        title_label = self._make_title_label(title, height=dp(52))
+        title_label.halign = "left"
+        title_label.valign = "middle"
+        title_label.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        header.add_widget(title_label)
+        if action_text:
+            action = self._make_text_button(action_text, height=dp(48), font_size=sp(16))
+            action.size_hint_x = None
+            action.width = dp(80)
+            action.bind(on_press=action_callback)
+            header.add_widget(action)
+        return header
+
+    def _make_page_scroll(self, content):
         scroll = ScrollView(size_hint=(1, 1))
-        content = BoxLayout(
-            orientation="vertical",
-            spacing=CARD_SPACING,
-            padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)],
-            size_hint_y=None
-        )
+        content.size_hint_y = None
         content.bind(minimum_height=content.setter("height"))
+        scroll.add_widget(content)
+        return scroll
 
+    def _make_bottom_navigation(self, selected_page):
+        nav = BoxLayout(
+            size_hint_y=None, height=dp(64), spacing=dp(8),
+            padding=[PAGE_PADDING, dp(8), PAGE_PADDING, dp(8)]
+        )
+        self._add_rounded_background(nav, COLOR_CARD_BG, 0, COLOR_BORDER)
+        for page_name, text in (("accounting", "记账"), ("records", "明细"), ("stats", "统计")):
+            selected = page_name == selected_page
+            button = self._make_button(
+                text,
+                COLOR_PRIMARY if selected else COLOR_PRIMARY_LIGHT,
+                COLOR_WHITE if selected else COLOR_TEXT_SECONDARY,
+                height=dp(48),
+                font_size=sp(16)
+            )
+            button.bind(on_press=lambda instance, target=page_name: self.switch_page(target))
+            nav.add_widget(button)
+            self._nav_buttons[(selected_page, page_name)] = button
+        return nav
 
-        # ===== 本月统计卡片 =====
+    def _build_accounting_screen(self):
+        screen = Screen(name="accounting")
+        page = BoxLayout(orientation="vertical")
+        content = BoxLayout(
+            orientation="vertical", spacing=CARD_SPACING,
+            padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
+        )
+        content.add_widget(self._make_page_header(
+            "个人记账", "设置", lambda instance: self.switch_page("settings")
+        ))
+
         expense_card = self._make_card()
         expense_layout = BoxLayout(
-            orientation="vertical",
-            padding=[CARD_PADDING, dp(16), CARD_PADDING, dp(14)],
-            spacing=dp(4),
-            size_hint_y=None,
-            height=dp(132)
+            orientation="vertical", padding=[CARD_PADDING, dp(16), CARD_PADDING, dp(14)],
+            spacing=dp(4), size_hint_y=None, height=dp(132)
         )
-
         expense_layout.add_widget(self._make_section_label("本月总支出", font_size=sp(16), height=dp(24)))
-
         self.monthly_expense_label = Label(
-            text="0.00 元",
-            font_size=sp(34),
-            size_hint_y=None,
-            height=dp(58),
-            color=COLOR_PRIMARY
+            text="0.00 元", font_size=sp(34), size_hint_y=None, height=dp(58), color=COLOR_PRIMARY
         )
         expense_layout.add_widget(self.monthly_expense_label)
-
-        # 记录数量
         self.record_count_label = Label(
-            text="记录数：0",
-            font_size=sp(16),
-            size_hint_y=None,
-            height=dp(24),
-            color=COLOR_TEXT_SECONDARY
+            text="记录数：0", font_size=sp(16), size_hint_y=None,
+            height=dp(24), color=COLOR_TEXT_SECONDARY
         )
         expense_layout.add_widget(self.record_count_label)
-
         expense_card.add_widget(expense_layout)
         content.add_widget(expense_card)
 
-        # ===== 表单卡片 =====
         form_card = self._make_card()
         form_layout = BoxLayout(
-            orientation="vertical",
-            spacing=dp(10),
-            padding=[CARD_PADDING, CARD_PADDING, CARD_PADDING, CARD_PADDING],
-            size_hint_y=None
+            orientation="vertical", spacing=dp(10),
+            padding=[CARD_PADDING] * 4, size_hint_y=None
         )
         form_layout.bind(minimum_height=form_layout.setter("height"))
-
         form_layout.add_widget(self._make_section_label("消费备注："))
         self.name_input = self._make_text_input(hint_text="例如：午餐")
         form_layout.add_widget(self.name_input)
-
         form_layout.add_widget(self._make_section_label("分类："))
-        self.category_spinner = self._make_spinner(
-            text="饮食正餐",
-            values=self.categories
-        )
+        self.category_spinner = self._make_spinner(text="饮食正餐", values=self.categories)
         form_layout.add_widget(self.category_spinner)
-
         form_layout.add_widget(self._make_section_label("金额（元）："))
-        self.amount_input = self._make_text_input(
-            hint_text="0.00",
-            input_filter="float"
-        )
+        self.amount_input = self._make_text_input(hint_text="0.00", input_filter="float")
         form_layout.add_widget(self.amount_input)
-
         form_layout.add_widget(self._make_section_label("日期："))
 
         now = datetime.now()
         date_layout = GridLayout(cols=3, spacing=dp(10), size_hint_y=None, height=dp(82))
-
-        year_box = BoxLayout(orientation="vertical", spacing=dp(4))
-        year_box.add_widget(Label(text="年", color=COLOR_TEXT_SECONDARY, font_size=sp(15), size_hint_y=None, height=dp(24)))
-        self.year_input = self._make_text_input(
-            text=str(now.year),
-            input_filter="int"
+        date_fields = (
+            ("年", self._make_text_input(text=str(now.year), input_filter="int")),
+            ("月", self._make_spinner(str(now.month), [str(i) for i in range(1, 13)])),
+            ("日", self._make_spinner(str(now.day), [str(i) for i in range(1, 32)])),
         )
-        year_box.add_widget(self.year_input)
-        date_layout.add_widget(year_box)
-
-        month_box = BoxLayout(orientation="vertical", spacing=dp(4))
-        month_box.add_widget(Label(text="月", color=COLOR_TEXT_SECONDARY, font_size=sp(15), size_hint_y=None, height=dp(24)))
-        self.month_spinner = self._make_spinner(
-            text=str(now.month),
-            values=[str(i) for i in range(1, 13)]
-        )
-        month_box.add_widget(self.month_spinner)
-        date_layout.add_widget(month_box)
-
-        day_box = BoxLayout(orientation="vertical", spacing=dp(4))
-        day_box.add_widget(Label(text="日", color=COLOR_TEXT_SECONDARY, font_size=sp(15), size_hint_y=None, height=dp(24)))
-        self.day_spinner = self._make_spinner(
-            text=str(now.day),
-            values=[str(i) for i in range(1, 32)]
-        )
-        day_box.add_widget(self.day_spinner)
-        date_layout.add_widget(day_box)
-
+        self.year_input, self.month_spinner, self.day_spinner = [field for _, field in date_fields]
+        for label_text, field in date_fields:
+            field_box = BoxLayout(orientation="vertical", spacing=dp(4))
+            field_box.add_widget(Label(
+                text=label_text, color=COLOR_TEXT_SECONDARY, font_size=sp(15),
+                size_hint_y=None, height=dp(24)
+            ))
+            field_box.add_widget(field)
+            date_layout.add_widget(field_box)
         form_layout.add_widget(date_layout)
-
         record_btn = self._make_primary_button("记录账单", height=PRIMARY_BUTTON_HEIGHT, font_size=sp(19))
         record_btn.bind(on_press=self.record_bill)
         form_layout.add_widget(record_btn)
-
         form_card.add_widget(form_layout)
         content.add_widget(form_card)
 
+        page.add_widget(self._make_page_scroll(content))
+        page.add_widget(self._make_bottom_navigation("accounting"))
+        screen.add_widget(page)
+        return screen
 
-        # ===== 功能按钮卡片 =====
-        button_card = self._make_card()
-        button_grid = GridLayout(
-            cols=2,
-            spacing=dp(12),
-            padding=[CARD_PADDING, CARD_PADDING, CARD_PADDING, CARD_PADDING],
-            size_hint_y=None
+    def _build_records_screen(self):
+        screen = Screen(name="records")
+        page = BoxLayout(orientation="vertical")
+        content = BoxLayout(
+            orientation="vertical", spacing=CARD_SPACING,
+            padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
         )
-        button_grid.bind(minimum_height=button_grid.setter("height"))
+        content.add_widget(self._make_page_header("明细"))
+        records_card = self._make_card()
+        self.records_list = GridLayout(
+            cols=1, spacing=dp(8), padding=[CARD_PADDING] * 4, size_hint_y=None
+        )
+        self.records_list.bind(minimum_height=self.records_list.setter("height"))
+        records_card.add_widget(self.records_list)
+        content.add_widget(records_card)
+        page.add_widget(self._make_page_scroll(content))
+        page.add_widget(self._make_bottom_navigation("records"))
+        screen.add_widget(page)
+        return screen
 
-        buttons = [
-            ("本月统计", self.show_monthly_stats, False),
-            ("历史统计", self.show_history_stats, False),
-            ("分类设置", self.show_categories, False),
-            ("导出数据", self.export_data, False),
-            ("查看记录", self.show_records, False),
-            ("删除记录", self.delete_records, True),
-            ("导入数据", self.import_data_popup, False),
-        ]
+    def _build_stats_screen(self):
+        screen = Screen(name="stats")
+        page = BoxLayout(orientation="vertical")
+        content = BoxLayout(
+            orientation="vertical", spacing=CARD_SPACING,
+            padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
+        )
+        content.add_widget(self._make_page_header("统计"))
+        card = self._make_card()
+        actions = BoxLayout(
+            orientation="vertical", spacing=dp(12), padding=[CARD_PADDING] * 4, size_hint_y=None
+        )
+        actions.bind(minimum_height=actions.setter("height"))
+        monthly_btn = self._make_secondary_button("本月统计")
+        monthly_btn.bind(on_press=self.show_monthly_stats)
+        history_btn = self._make_secondary_button("历史统计")
+        history_btn.bind(on_press=self.show_history_stats)
+        actions.add_widget(monthly_btn)
+        actions.add_widget(history_btn)
+        card.add_widget(actions)
+        content.add_widget(card)
+        page.add_widget(self._make_page_scroll(content))
+        page.add_widget(self._make_bottom_navigation("stats"))
+        screen.add_widget(page)
+        return screen
 
-        for text, callback, is_danger in buttons:
-            factory = self._make_danger_button if is_danger else self._make_secondary_button
-            btn = factory(text, height=CONTROL_HEIGHT, font_size=sp(16))
-            btn.bind(on_press=callback)
-            button_grid.add_widget(btn)
+    def _build_settings_screen(self):
+        screen = Screen(name="settings")
+        content = BoxLayout(
+            orientation="vertical", spacing=CARD_SPACING,
+            padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
+        )
+        content.add_widget(self._make_page_header(
+            "设置", "返回", lambda instance: self.switch_page("accounting")
+        ))
+        sections = (
+            ("分类管理", (("管理分类", self.show_categories, False),)),
+            ("数据管理", (
+                ("导入数据", self.import_data_popup, False),
+                ("导出数据", self.export_data, False),
+            )),
+            ("危险操作", (
+                ("删除记录", self.delete_records, True),
+                ("清空所有记录", self.clear_all_records, True),
+            )),
+        )
+        for title, actions in sections:
+            content.add_widget(self._make_section_label(title))
+            card = self._make_card()
+            box = BoxLayout(
+                orientation="vertical", spacing=dp(10), padding=[CARD_PADDING] * 4, size_hint_y=None
+            )
+            box.bind(minimum_height=box.setter("height"))
+            for text, callback, danger in actions:
+                button = (self._make_danger_button if danger else self._make_secondary_button)(text)
+                button.bind(on_press=callback)
+                box.add_widget(button)
+            card.add_widget(box)
+            content.add_widget(card)
+        screen.add_widget(self._make_page_scroll(content))
+        return screen
 
-        button_card.add_widget(button_grid)
-        content.add_widget(button_card)
+    def switch_page(self, page_name):
+        """仅切换视图；所有页面继续使用当前 MainScreen 的共享数据。"""
+        if page_name == "records":
+            self.refresh_records_page()
+        self.page_manager.current = page_name
 
-        scroll.add_widget(content)
-        root.add_widget(scroll)
-        self.add_widget(root)
+    def refresh_records_page(self):
+        """按既有排序规则刷新明细页最近 50 条记录。"""
+        self.sort_records()
+        self.records_list.clear_widgets()
+        if not self.records:
+            self.records_list.add_widget(Label(
+                text="暂无记录", color=COLOR_TEXT_SECONDARY,
+                size_hint_y=None, height=dp(72), font_size=sp(16)
+            ))
+            return
+        for record in self.records[:50]:
+            row = BoxLayout(size_hint_y=None, height=dp(68), spacing=dp(10))
+            info = Label(
+                text=f"{record.get('日期', '')}  {record.get('分类', '')}\n{record.get('姓名/备注', '')}",
+                color=COLOR_TEXT, font_size=sp(15), halign="left", valign="middle"
+            )
+            info.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+            amount = Label(
+                text=f"{float(record.get('金额', 0)):.2f} 元", color=COLOR_PRIMARY,
+                font_size=sp(17), bold=True, halign="right", valign="middle",
+                size_hint_x=None, width=dp(112)
+            )
+            amount.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+            row.add_widget(info)
+            row.add_widget(amount)
+            self.records_list.add_widget(row)
+
+    def _handle_back_key(self, window, key, *args):
+        if key == 27 and getattr(self, "page_manager", None) is not None:
+            if self.page_manager.current != "accounting":
+                self.switch_page("accounting")
+                return True
+        return False
+
+    def _unbind_window_keyboard(self, instance, parent):
+        if parent is None:
+            Window.unbind(on_keyboard=self._handle_back_key)
 
     def make_card(self):
         """保留原有方法，供其他可能调用的地方使用"""
