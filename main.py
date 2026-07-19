@@ -719,7 +719,8 @@ class MainScreen(Screen):
         """按既有排序规则刷新明细页最近 50 条记录。"""
         self.sort_records()
         self.records_list.clear_widgets()
-        if not self.records:
+        display_records = [record for record in self.records if isinstance(record, dict)][:50]
+        if not display_records:
             empty = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(164))
             empty.add_widget(Label(
                 text="暂无记录", color=COLOR_TEXT, size_hint_y=None,
@@ -734,7 +735,7 @@ class MainScreen(Screen):
             empty.add_widget(go_accounting)
             self.records_list.add_widget(empty)
             return
-        for record in self.records[:50]:
+        for record in display_records:
             self.records_list.add_widget(RecordRow(record, self.show_record_detail))
 
     def show_record_detail(self, record):
@@ -834,7 +835,7 @@ class MainScreen(Screen):
     # 数据处理
     # =========================
     def _has_exportable_records(self):
-        return bool(self.records)
+        return any(isinstance(record, dict) for record in self.records)
 
     def sort_records(self):
         def sort_key(record):
@@ -1599,15 +1600,18 @@ class MainScreen(Screen):
         grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         grid.bind(minimum_height=grid.setter("height"))
 
-        display_records = self.records[:50]
+        display_records = [record for record in self.records if isinstance(record, dict)][:50]
 
         for record in display_records:
             note = str(record.get("姓名/备注", ""))
             category = str(record.get("分类", ""))
-            amount = float(record.get("金额", 0))
+            try:
+                amount_text = f"{float(record.get('金额', 0)):.2f}"
+            except (TypeError, ValueError):
+                amount_text = str(record.get("金额", ""))
             date_str = str(record.get("日期", ""))
 
-            text = f"{date_str}  {category}\n{amount:.2f}元  {note}"
+            text = f"{date_str}  {category}\n{amount_text}元  {note}"
             row = Label(
                 text=text,
                 font_size=sp(16),
@@ -1671,12 +1675,17 @@ class MainScreen(Screen):
             return
 
         grid.clear_widgets()
-        for record in self.records[:20]:
+        display_records = [record for record in self.records if isinstance(record, dict)][:20]
+        for record in display_records:
             row = BoxLayout(size_hint_y=None, height=dp(68), spacing=dp(8))
 
+            try:
+                amount_text = f"{float(record.get('金额', 0)):.2f}"
+            except (TypeError, ValueError):
+                amount_text = str(record.get("金额", ""))
             record_text = (
                 f"{record.get('日期', '')} {record.get('分类', '')}\n"
-                f"{float(record.get('金额', 0)):.2f}元 {str(record.get('姓名/备注', ''))[:14]}"
+                f"{amount_text}元 {str(record.get('姓名/备注', ''))[:14]}"
             )
 
             info_label = Label(
