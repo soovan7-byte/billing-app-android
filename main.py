@@ -5,7 +5,7 @@ import csv
 from datetime import datetime
 
 from kivy.config import Config
-from kivy.utils import platform
+from kivy.utils import escape_markup, platform
 
 # =========================
 # 字体设置
@@ -33,6 +33,7 @@ from kivy.app import App
 from kivy.core.window import Window
 from kivy.metrics import dp, sp
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.button import Button
 from kivy.uix.filechooser import FileChooserListView
 from kivy.uix.gridlayout import GridLayout
@@ -40,10 +41,10 @@ from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.uix.scrollview import ScrollView
-from kivy.uix.spinner import Spinner
+from kivy.uix.spinner import Spinner, SpinnerOption
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
-from kivy.graphics import Color, Ellipse, RoundedRectangle
+from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
 from kivy.clock import Clock
 
 from openpyxl import Workbook, load_workbook
@@ -52,6 +53,32 @@ from openpyxl import Workbook, load_workbook
 if platform in ("win", "linux", "macosx"):
     Window.minimum_width = 380
     Window.minimum_height = 700
+
+# =========================
+# 移动端视觉主题
+# =========================
+COLOR_PAGE_BG = (0.969, 0.973, 0.980, 1)       # F7F8FA
+COLOR_CARD_BG = (1, 1, 1, 1)                   # FFFFFF
+COLOR_PRIMARY = (0.145, 0.388, 0.922, 1)       # 2563EB
+COLOR_PRIMARY_LIGHT = (0.937, 0.965, 1, 1)      # EFF6FF
+COLOR_TEXT = (0.067, 0.094, 0.153, 1)           # 111827
+COLOR_TEXT_SECONDARY = (0.420, 0.447, 0.502, 1) # 6B7280
+COLOR_BORDER = (0.898, 0.906, 0.922, 1)         # E5E7EB
+COLOR_DANGER = (0.863, 0.149, 0.149, 1)         # DC2626
+COLOR_DANGER_LIGHT = (0.996, 0.949, 0.949, 1)   # FEF2F2
+COLOR_SUCCESS = (0.086, 0.639, 0.290, 1)        # 16A34A
+COLOR_SUCCESS_LIGHT = (0.941, 0.992, 0.957, 1)  # F0FDF4
+COLOR_WHITE = (1, 1, 1, 1)
+COLOR_TRANSPARENT = (1, 1, 1, 0)
+
+PAGE_PADDING = dp(16)
+CARD_SPACING = dp(12)
+CARD_PADDING = dp(16)
+CARD_RADIUS = dp(16)
+BUTTON_RADIUS = dp(12)
+INPUT_RADIUS = dp(10)
+PRIMARY_BUTTON_HEIGHT = dp(52)
+CONTROL_HEIGHT = dp(48)
 
 
 CATEGORY_CHART_COLORS = [
@@ -66,6 +93,84 @@ CATEGORY_CHART_COLORS = [
     (0.84, 0.15, 0.45, 1),
     (0.40, 0.70, 0.20, 1),
 ]
+
+
+class ThemedSpinnerOption(SpinnerOption):
+    """保证下拉选项在 Android 上保持清晰且具备足够触控高度。"""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.size_hint_y = None
+        self.height = CONTROL_HEIGHT
+        self.background_normal = ""
+        self.background_disabled_normal = ""
+        self.background_color = COLOR_TRANSPARENT
+        self.color = COLOR_PRIMARY
+        self.font_size = sp(17)
+
+        with self.canvas.before:
+            Color(*COLOR_PRIMARY_LIGHT)
+            self.option_bg = RoundedRectangle(pos=self.pos, size=self.size)
+
+        def update_background(instance, value):
+            instance.option_bg.pos = instance.pos
+            instance.option_bg.size = instance.size
+
+        self.bind(pos=update_background, size=update_background)
+
+
+class RecordRow(ButtonBehavior, BoxLayout):
+    """明细页中可直接点击的记录卡片。"""
+    def __init__(self, record, on_open, **kwargs):
+        super().__init__(
+            orientation="horizontal", spacing=dp(12), padding=[dp(14), dp(10)],
+            size_hint_y=None, height=dp(76), **kwargs
+        )
+        self.record = record
+        with self.canvas.before:
+            Color(*COLOR_BORDER)
+            self.row_border = RoundedRectangle(pos=self.pos, size=self.size, radius=[BUTTON_RADIUS] * 4)
+            Color(*COLOR_CARD_BG)
+            self.row_bg = RoundedRectangle(
+                pos=(self.x + dp(1), self.y + dp(1)),
+                size=(max(0, self.width - dp(2)), max(0, self.height - dp(2))),
+                radius=[BUTTON_RADIUS - dp(1)] * 4
+            )
+
+        def update_canvas(instance, value):
+            instance.row_border.pos = instance.pos
+            instance.row_border.size = instance.size
+            instance.row_bg.pos = (instance.x + dp(1), instance.y + dp(1))
+            instance.row_bg.size = (max(0, instance.width - dp(2)), max(0, instance.height - dp(2)))
+
+        self.bind(pos=update_canvas, size=update_canvas)
+        self.bind(on_release=lambda instance: on_open(self.record))
+
+        text_box = BoxLayout(orientation="vertical", spacing=dp(2))
+        meta = Label(
+            text=f"{record.get('日期', '')}  ·  {record.get('分类', '')}",
+            color=COLOR_TEXT_SECONDARY, font_size=sp(13), halign="left", valign="middle",
+            size_hint_y=None, height=dp(22)
+        )
+        meta.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        note = Label(
+            text=str(record.get("姓名/备注", "")), color=COLOR_TEXT, font_size=sp(16),
+            halign="left", valign="middle", shorten=True, shorten_from="right", max_lines=1
+        )
+        note.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
+        text_box.add_widget(meta)
+        text_box.add_widget(note)
+        self.add_widget(text_box)
+
+        try:
+            amount_text = f"{float(record.get('金额', 0)):.2f} 元"
+        except (TypeError, ValueError):
+            amount_text = f"{record.get('金额', '')} 元"
+        amount = Label(
+            text=amount_text, color=COLOR_PRIMARY, font_size=sp(17), bold=True,
+            halign="right", valign="middle", size_hint_x=None, width=dp(112)
+        )
+        amount.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        self.add_widget(amount)
 
 
 class CategoryPieChart(Widget):
@@ -116,6 +221,8 @@ class MainScreen(Screen):
         self._android_export_bound = False
         self._pending_android_export = None
         self._pending_android_import = False
+        self.selected_record_date = datetime.now().date()
+        self._success_feedback_event = None
 
         self.storage_dir = self.get_storage_dir()
         os.makedirs(self.storage_dir, exist_ok=True)
@@ -160,21 +267,39 @@ class MainScreen(Screen):
     # =========================
     # UI 辅助方法
     # =========================
-    def _make_card(self, bg_color=(1, 1, 1, 1), radius=dp(16)):
+    def _add_rounded_background(self, widget, color, radius, border_color=None):
+        """为控件添加随位置和尺寸更新的圆角背景，且不拦截触摸事件。"""
+        with widget.canvas.before:
+            if border_color is not None:
+                Color(*border_color)
+                widget.theme_border = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius] * 4)
+            widget.theme_bg_color = Color(*color)
+            inset = dp(1) if border_color is not None else 0
+            widget.theme_bg = RoundedRectangle(
+                pos=(widget.x + inset, widget.y + inset),
+                size=(max(0, widget.width - inset * 2), max(0, widget.height - inset * 2)),
+                radius=[max(0, radius - inset)] * 4
+            )
+
+        def update_background(instance, value):
+            if border_color is not None:
+                instance.theme_border.pos = instance.pos
+                instance.theme_border.size = instance.size
+            instance.theme_bg.pos = (instance.x + inset, instance.y + inset)
+            instance.theme_bg.size = (
+                max(0, instance.width - inset * 2),
+                max(0, instance.height - inset * 2)
+            )
+
+        widget.bind(pos=update_background, size=update_background)
+        return widget
+
+    def _make_card(self, bg_color=COLOR_CARD_BG, radius=CARD_RADIUS):
         """创建一个带圆角白色背景的卡片容器"""
         card = BoxLayout(size_hint_y=None)
         card.bind(minimum_height=card.setter("height"))
 
-        with card.canvas.before:
-            Color(*bg_color)
-            card.bg = RoundedRectangle(radius=[radius] * 4, pos=card.pos, size=card.size)
-
-        def update_bg(instance, value):
-            instance.bg.pos = instance.pos
-            instance.bg.size = instance.size
-
-        card.bind(pos=update_bg, size=update_bg)
-        return card
+        return self._add_rounded_background(card, bg_color, radius)
 
     def _make_title_label(self, text, font_size=sp(24), height=dp(48)):
         label = Label(
@@ -182,7 +307,7 @@ class MainScreen(Screen):
             font_size=font_size,
             size_hint_y=None,
             height=height,
-            color=(0.12, 0.22, 0.36, 1)
+            color=COLOR_TEXT
         )
         return label
 
@@ -194,48 +319,41 @@ class MainScreen(Screen):
             height=height,
             halign="left",
             valign="middle",
-            color=(0.12, 0.22, 0.36, 1)
+            color=COLOR_TEXT
         )
         label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
         return label
 
-    def _make_primary_button(self, text, height=dp(48), font_size=sp(18)):
+    def _make_button(self, text, bg_color, text_color, height=CONTROL_HEIGHT, font_size=sp(17)):
         btn = Button(
             text=text,
             size_hint_y=None,
             height=height,
             font_size=font_size,
             background_normal="",
-            background_color=(0.18, 0.63, 0.35, 1),
-            color=(1, 1, 1, 1)
+            background_color=COLOR_TRANSPARENT,
+            color=text_color
         )
-        return btn
+        return self._add_rounded_background(btn, bg_color, BUTTON_RADIUS)
 
-    def _make_secondary_button(self, text, height=dp(44), font_size=sp(17)):
-        btn = Button(
-            text=text,
-            size_hint_y=None,
-            height=height,
-            font_size=font_size,
-            background_normal="",
-            background_color=(0.35, 0.55, 0.75, 1),
-            color=(1, 1, 1, 1)
-        )
-        return btn
+    def _make_primary_button(self, text, height=PRIMARY_BUTTON_HEIGHT, font_size=sp(18)):
+        return self._make_button(text, COLOR_PRIMARY, COLOR_WHITE, height, font_size)
+
+    def _make_secondary_button(self, text, height=CONTROL_HEIGHT, font_size=sp(17)):
+        return self._make_button(text, COLOR_PRIMARY_LIGHT, COLOR_PRIMARY, height, font_size)
+
+    def _make_text_button(self, text, height=CONTROL_HEIGHT, font_size=sp(17)):
+        return self._make_button(text, COLOR_CARD_BG, COLOR_TEXT_SECONDARY, height, font_size)
+
+    def _make_danger_button(self, text, height=CONTROL_HEIGHT, font_size=sp(17)):
+        return self._make_button(text, COLOR_DANGER_LIGHT, COLOR_DANGER, height, font_size)
 
     def _make_action_button(self, text, color, height=dp(48), font_size=sp(18)):
-        btn = Button(
-            text=text,
-            size_hint_y=None,
-            height=height,
-            font_size=font_size,
-            background_normal="",
-            background_color=color,
-            color=(1, 1, 1, 1)
-        )
-        return btn
+        if color == COLOR_DANGER:
+            return self._make_danger_button(text, height, font_size)
+        return self._make_secondary_button(text, height, font_size)
 
-    def _make_text_input(self, hint_text="", input_filter=None, height=dp(46), font_size=sp(18), **kwargs):
+    def _make_text_input(self, hint_text="", input_filter=None, height=CONTROL_HEIGHT, font_size=sp(17), **kwargs):
         ti = TextInput(
             hint_text=hint_text,
             multiline=False,
@@ -245,201 +363,465 @@ class MainScreen(Screen):
             font_size=font_size,
             background_normal="",
             background_active="",
-            background_color=(0.96, 0.96, 0.96, 1),
-            foreground_color=(0, 0, 0, 1),
-            cursor_color=(0, 0, 0, 1),
-            padding=[dp(10), dp(10), dp(10), dp(10)],
+            background_color=COLOR_WHITE,
+            foreground_color=COLOR_TEXT,
+            cursor_color=COLOR_PRIMARY,
+            selection_color=(0.145, 0.388, 0.922, 0.35),
+            hint_text_color=COLOR_TEXT_SECONDARY,
+            padding=[dp(12), dp(12), dp(12), dp(10)],
             disabled=False,
             readonly=False,
             write_tab=False,
             **kwargs
         )
-        # 移除自定义圆角背景，使用默认 TextInput 外观
+        # TextInput 自身绘制不透明白色背景；自定义 Canvas 只绘制边框，
+        # 避免部分 Android 设备上填充图形覆盖输入文字的纹理。
+        with ti.canvas.after:
+            Color(*COLOR_BORDER)
+            ti.input_border = Line(
+                rounded_rectangle=(ti.x, ti.y, ti.width, ti.height, INPUT_RADIUS),
+                width=dp(1)
+            )
+
+        def update_input_border(instance, value):
+            instance.input_border.rounded_rectangle = (
+                instance.x,
+                instance.y,
+                instance.width,
+                instance.height,
+                INPUT_RADIUS
+            )
+
+        ti.bind(pos=update_input_border, size=update_input_border)
         return ti
 
-    def _make_spinner(self, text, values, height=dp(46), font_size=sp(18)):
-        sp = Spinner(
+    def _make_spinner(self, text, values, height=CONTROL_HEIGHT, font_size=sp(17)):
+        spinner = Spinner(
             text=text,
             values=values,
             size_hint_y=None,
             height=height,
             font_size=font_size,
+            option_cls=ThemedSpinnerOption,
             background_normal="",
-            background_color=(0.10, 0.17, 0.24, 1),
-            color=(1, 1, 1, 1)
+            background_color=COLOR_TRANSPARENT,
+            color=COLOR_TEXT
         )
-        # 添加圆角背景
-        with sp.canvas.before:
-            Color(0.85, 0.90, 0.95, 1)  # 浅蓝灰
-            sp.bg = RoundedRectangle(radius=[dp(8)]*4, pos=sp.pos, size=sp.size)
+        return self._add_rounded_background(spinner, COLOR_CARD_BG, INPUT_RADIUS, COLOR_BORDER)
 
-        def update_bg(instance, value):
-            instance.bg.pos = instance.pos
-            instance.bg.size = instance.size
-
-        sp.bind(pos=update_bg, size=update_bg)
-        return sp
+    def _make_popup(self, title, content, size_hint, auto_dismiss=False):
+        # 清空 Popup 的默认纹理背景，并为内容层提供明确的不透明底色。
+        if not hasattr(content, "theme_bg"):
+            self._add_rounded_background(content, COLOR_CARD_BG, INPUT_RADIUS)
+        return Popup(
+            title=title,
+            content=content,
+            size_hint=size_hint,
+            auto_dismiss=auto_dismiss,
+            background="",
+            background_color=COLOR_CARD_BG,
+            separator_color=COLOR_BORDER,
+            title_color=COLOR_TEXT,
+            title_size=sp(20)
+        )
 
     # =========================
     # UI
     # =========================
     def build_ui(self):
-        # 根布局：浅灰背景
+        """构建共享同一业务状态的四页移动端导航骨架。"""
         root = BoxLayout(orientation="vertical")
         with root.canvas.before:
-            Color(0.94, 0.94, 0.94, 1)  # 浅灰
-            root.bg = RoundedRectangle(radius=[0]*4, pos=root.pos, size=root.size)
+            Color(*COLOR_PAGE_BG)
+            root.bg = RoundedRectangle(radius=[0] * 4, pos=root.pos, size=root.size)
 
         def update_root_bg(instance, value):
             instance.bg.pos = instance.pos
             instance.bg.size = instance.size
+
         root.bind(pos=update_root_bg, size=update_root_bg)
+        self.page_manager = ScreenManager()
+        self._nav_buttons = {}
+        self.page_manager.add_widget(self._build_accounting_screen())
+        self.page_manager.add_widget(self._build_records_screen())
+        self.page_manager.add_widget(self._build_stats_screen())
+        self.page_manager.add_widget(self._build_settings_screen())
+        root.add_widget(self.page_manager)
+        self.add_widget(root)
+        Window.bind(on_keyboard=self._handle_back_key)
+        self.bind(parent=self._unbind_window_keyboard)
+        self.switch_page("accounting")
 
+    def _make_page_header(self, title, action_text=None, action_callback=None):
+        header = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
+        title_label = self._make_title_label(title, height=dp(52))
+        title_label.halign = "left"
+        title_label.valign = "middle"
+        title_label.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        header.add_widget(title_label)
+        if action_text:
+            action = self._make_text_button(action_text, height=dp(48), font_size=sp(16))
+            action.size_hint_x = None
+            action.width = dp(80)
+            action.bind(on_press=action_callback)
+            header.add_widget(action)
+        return header
+
+    def _make_page_scroll(self, content):
         scroll = ScrollView(size_hint=(1, 1))
-        content = BoxLayout(
-            orientation="vertical",
-            spacing=dp(16),
-            padding=[dp(16), dp(16), dp(16), dp(24)],
-            size_hint_y=None
-        )
+        content.size_hint_y = None
         content.bind(minimum_height=content.setter("height"))
+        scroll.add_widget(content)
+        return scroll
 
+    def _make_bottom_navigation(self, selected_page):
+        nav = BoxLayout(
+            size_hint_y=None, height=dp(64), spacing=dp(8),
+            padding=[PAGE_PADDING, dp(8), PAGE_PADDING, dp(8)]
+        )
+        self._add_rounded_background(nav, COLOR_CARD_BG, 0, COLOR_BORDER)
+        for page_name, text in (("accounting", "记账"), ("records", "明细"), ("stats", "统计")):
+            selected = page_name == selected_page
+            button = self._make_button(
+                text,
+                COLOR_PRIMARY if selected else COLOR_PRIMARY_LIGHT,
+                COLOR_WHITE if selected else COLOR_TEXT_SECONDARY,
+                height=dp(48),
+                font_size=sp(16)
+            )
+            button.bind(on_press=lambda instance, target=page_name: self.switch_page(target))
+            nav.add_widget(button)
+            self._nav_buttons[(selected_page, page_name)] = button
+        return nav
 
-        # ===== 本月统计卡片 =====
+    def _build_accounting_screen(self):
+        screen = Screen(name="accounting")
+        page = BoxLayout(orientation="vertical")
+        content = BoxLayout(
+            orientation="vertical", spacing=CARD_SPACING,
+            padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
+        )
+        content.add_widget(self._make_page_header(
+            "个人记账", "设置", lambda instance: self.switch_page("settings")
+        ))
+
         expense_card = self._make_card()
         expense_layout = BoxLayout(
-            orientation="vertical",
-            padding=[dp(16), dp(24), dp(16), dp(16)],
-            spacing=dp(8),
-            size_hint_y=None,
-            height=dp(150)
+            orientation="vertical", padding=[CARD_PADDING, dp(16), CARD_PADDING, dp(14)],
+            spacing=dp(4), size_hint_y=None, height=dp(132)
         )
-
-        expense_layout.add_widget(self._make_section_label("本月总支出", font_size=sp(18), height=dp(28)))
-
+        expense_layout.add_widget(self._make_section_label("本月总支出", font_size=sp(16), height=dp(24)))
         self.monthly_expense_label = Label(
-            text="0.00 元",
-            font_size=sp(34),
-            size_hint_y=None,
-            height=dp(56),
-            color=(0.90, 0.30, 0.24, 1)
+            text="0.00 元", font_size=sp(34), size_hint_y=None, height=dp(58), color=COLOR_PRIMARY
         )
         expense_layout.add_widget(self.monthly_expense_label)
-
-        # 记录数量
         self.record_count_label = Label(
-            text="记录数：0",
-            font_size=sp(16),
-            size_hint_y=None,
-            height=dp(24),
-            color=(0.4, 0.4, 0.4, 1)
+            text="记录数：0", font_size=sp(16), size_hint_y=None,
+            height=dp(24), color=COLOR_TEXT_SECONDARY
         )
         expense_layout.add_widget(self.record_count_label)
-
         expense_card.add_widget(expense_layout)
         content.add_widget(expense_card)
 
-        # ===== 表单卡片 =====
         form_card = self._make_card()
         form_layout = BoxLayout(
-            orientation="vertical",
-            spacing=dp(12),
-            padding=[dp(16), dp(16), dp(16), dp(16)],
-            size_hint_y=None
+            orientation="vertical", spacing=dp(10),
+            padding=[CARD_PADDING] * 4, size_hint_y=None
         )
         form_layout.bind(minimum_height=form_layout.setter("height"))
-
+        form_layout.add_widget(self._make_section_label("金额（元）："))
+        self.amount_input = self._make_text_input(hint_text="0.00", input_filter="float")
+        form_layout.add_widget(self.amount_input)
+        form_layout.add_widget(self._make_section_label("分类："))
+        self.category_spinner = self._make_spinner(text="饮食正餐", values=self.categories)
+        form_layout.add_widget(self.category_spinner)
         form_layout.add_widget(self._make_section_label("消费备注："))
         self.name_input = self._make_text_input(hint_text="例如：午餐")
         form_layout.add_widget(self.name_input)
 
-        form_layout.add_widget(self._make_section_label("分类："))
-        self.category_spinner = self._make_spinner(
-            text="饮食正餐",
-            values=self.categories
+        date_layout = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(8))
+        date_text_box = BoxLayout(orientation="vertical", spacing=dp(2))
+        date_text_box.add_widget(self._make_section_label("日期", height=dp(24)))
+        self.record_date_label = Label(
+            color=COLOR_TEXT, font_size=sp(16), halign="left", valign="middle"
         )
-        form_layout.add_widget(self.category_spinner)
-
-        form_layout.add_widget(self._make_section_label("金额（元）："))
-        self.amount_input = self._make_text_input(
-            hint_text="0.00",
-            input_filter="float"
+        self.record_date_label.bind(
+            size=lambda inst, val: setattr(inst, "text_size", val)
         )
-        form_layout.add_widget(self.amount_input)
-
-        form_layout.add_widget(self._make_section_label("日期："))
-
-        now = datetime.now()
-        date_layout = GridLayout(cols=3, spacing=dp(10), size_hint_y=None, height=dp(82))
-
-        year_box = BoxLayout(orientation="vertical", spacing=dp(4))
-        year_box.add_widget(Label(text="年", font_size=sp(16), size_hint_y=None, height=dp(24)))
-        self.year_input = self._make_text_input(
-            text=str(now.year),
-            input_filter="int"
-        )
-        year_box.add_widget(self.year_input)
-        date_layout.add_widget(year_box)
-
-        month_box = BoxLayout(orientation="vertical", spacing=dp(4))
-        month_box.add_widget(Label(text="月", font_size=sp(16), size_hint_y=None, height=dp(24)))
-        self.month_spinner = self._make_spinner(
-            text=str(now.month),
-            values=[str(i) for i in range(1, 13)]
-        )
-        month_box.add_widget(self.month_spinner)
-        date_layout.add_widget(month_box)
-
-        day_box = BoxLayout(orientation="vertical", spacing=dp(4))
-        day_box.add_widget(Label(text="日", font_size=sp(16), size_hint_y=None, height=dp(24)))
-        self.day_spinner = self._make_spinner(
-            text=str(now.day),
-            values=[str(i) for i in range(1, 32)]
-        )
-        day_box.add_widget(self.day_spinner)
-        date_layout.add_widget(day_box)
-
+        date_text_box.add_widget(self.record_date_label)
+        date_layout.add_widget(date_text_box)
+        change_date_btn = self._make_text_button("修改", height=dp(48), font_size=sp(16))
+        change_date_btn.size_hint_x = None
+        change_date_btn.width = dp(72)
+        change_date_btn.bind(on_press=self.open_record_date_popup)
+        date_layout.add_widget(change_date_btn)
+        self._update_record_date_label()
         form_layout.add_widget(date_layout)
-
-        record_btn = self._make_primary_button("记录账单", height=dp(52), font_size=sp(20))
+        record_btn = self._make_primary_button("记一笔", height=PRIMARY_BUTTON_HEIGHT, font_size=sp(19))
         record_btn.bind(on_press=self.record_bill)
         form_layout.add_widget(record_btn)
-
+        self.record_success_label = Label(
+            text="", color=COLOR_SUCCESS, font_size=sp(15),
+            size_hint_y=None, height=dp(28), opacity=0,
+            halign="center", valign="middle"
+        )
+        self.record_success_label.bind(
+            size=lambda inst, val: setattr(inst, "text_size", val)
+        )
+        form_layout.add_widget(self.record_success_label)
         form_card.add_widget(form_layout)
         content.add_widget(form_card)
 
+        page.add_widget(self._make_page_scroll(content))
+        page.add_widget(self._make_bottom_navigation("accounting"))
+        screen.add_widget(page)
+        return screen
 
-        # ===== 功能按钮卡片 =====
-        button_card = self._make_card()
-        button_grid = GridLayout(
-            cols=2,
-            spacing=dp(12),
-            padding=[dp(16), dp(16), dp(16), dp(16)],
-            size_hint_y=None
+    def _build_records_screen(self):
+        screen = Screen(name="records")
+        page = BoxLayout(orientation="vertical")
+        content = BoxLayout(
+            orientation="vertical", spacing=CARD_SPACING,
+            padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
         )
-        button_grid.bind(minimum_height=button_grid.setter("height"))
+        content.add_widget(self._make_page_header("明细"))
+        records_card = self._make_card()
+        self.records_list = GridLayout(
+            cols=1, spacing=dp(8), padding=[CARD_PADDING] * 4, size_hint_y=None
+        )
+        self.records_list.bind(minimum_height=self.records_list.setter("height"))
+        records_card.add_widget(self.records_list)
+        content.add_widget(records_card)
+        page.add_widget(self._make_page_scroll(content))
+        page.add_widget(self._make_bottom_navigation("records"))
+        screen.add_widget(page)
+        return screen
 
-        buttons = [
-            ("本月统计", (0.35, 0.56, 0.75, 1), self.show_monthly_stats),
-            ("历史统计", (0.35, 0.56, 0.75, 1), self.show_history_stats),
-            ("分类设置", (0.35, 0.56, 0.75, 1), self.show_categories),
-            ("导出数据", (0.35, 0.56, 0.75, 1), self.export_data),
-            ("查看记录", (0.35, 0.56, 0.75, 1), self.show_records),
-            ("删除记录", (0.80, 0.30, 0.25, 1), self.delete_records),
-            ("导入数据", (0.35, 0.56, 0.75, 1), self.import_data_popup),
+    def _build_stats_screen(self):
+        screen = Screen(name="stats")
+        page = BoxLayout(orientation="vertical")
+        content = BoxLayout(
+            orientation="vertical", spacing=CARD_SPACING,
+            padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
+        )
+        content.add_widget(self._make_page_header("统计"))
+
+        controls_card = self._make_card()
+        controls = BoxLayout(
+            orientation="vertical", spacing=dp(10), padding=[CARD_PADDING] * 4, size_hint_y=None
+        )
+        controls.bind(minimum_height=controls.setter("height"))
+        controls.add_widget(self._make_section_label("统计类型", font_size=sp(16), height=dp(26)))
+        mode_selector = BoxLayout(size_hint_y=None, height=CONTROL_HEIGHT, spacing=dp(8))
+        self.stats_month_button = self._make_primary_button("月度", height=CONTROL_HEIGHT, font_size=sp(16))
+        self.stats_year_button = self._make_text_button("年度", height=CONTROL_HEIGHT, font_size=sp(16))
+        self.stats_month_button.bind(on_press=lambda instance: self._set_stats_mode("month"))
+        self.stats_year_button.bind(on_press=lambda instance: self._set_stats_mode("year"))
+        mode_selector.add_widget(self.stats_month_button)
+        mode_selector.add_widget(self.stats_year_button)
+        controls.add_widget(mode_selector)
+        controls.add_widget(self._make_section_label("统计周期", font_size=sp(16), height=dp(26)))
+        self.stats_period_spinner = self._make_spinner("", ())
+        self.stats_period_spinner.bind(text=self._on_stats_period_changed)
+        controls.add_widget(self.stats_period_spinner)
+        controls_card.add_widget(controls)
+        content.add_widget(controls_card)
+
+        self.stats_mode = "month"
+        self._updating_stats_period = False
+        self.stats_results = BoxLayout(orientation="vertical", spacing=CARD_SPACING, size_hint_y=None)
+        self.stats_results.bind(minimum_height=self.stats_results.setter("height"))
+        content.add_widget(self.stats_results)
+        page.add_widget(self._make_page_scroll(content))
+        page.add_widget(self._make_bottom_navigation("stats"))
+        screen.add_widget(page)
+        return screen
+
+    def _build_settings_screen(self):
+        screen = Screen(name="settings")
+        content = BoxLayout(
+            orientation="vertical", spacing=CARD_SPACING,
+            padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
+        )
+        content.add_widget(self._make_page_header(
+            "设置", "返回", lambda instance: self.switch_page("accounting")
+        ))
+
+        overview_card = self._make_card()
+        overview_box = BoxLayout(
+            orientation="vertical", spacing=dp(8), padding=[CARD_PADDING] * 4, size_hint_y=None
+        )
+        overview_box.bind(minimum_height=overview_box.setter("height"))
+        self.settings_records_count_label = self._make_section_label("账单记录：0 条", font_size=sp(17), height=dp(28))
+        self.settings_categories_count_label = self._make_section_label("分类数量：0 个", font_size=sp(17), height=dp(28))
+        settings_storage_tip = Label(
+            text="数据保存在本机应用目录，卸载应用前请先导出完整备份。",
+            color=COLOR_TEXT_SECONDARY, font_size=sp(14), halign="left", valign="middle",
+            size_hint_y=None, height=dp(44)
+        )
+        settings_storage_tip.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        overview_box.add_widget(self.settings_records_count_label)
+        overview_box.add_widget(self.settings_categories_count_label)
+        overview_box.add_widget(settings_storage_tip)
+        overview_card.add_widget(overview_box)
+        content.add_widget(overview_card)
+
+        sections = (
+            ("分类管理", "管理记账时可选择的消费分类", (("管理分类", self.show_categories, False),)),
+            ("数据管理", "导入数据：从 JSON、CSV 或 Excel 恢复账单\n导出数据：生成账单表格或完整备份", (
+                ("导入数据", self.import_data_popup, False),
+                ("导出数据", self.export_data, False),
+            )),
+            ("危险操作", "清空所有账单记录，不删除分类", (
+                ("清空所有记录", self.clear_all_records, True),
+            )),
+        )
+        for title, description, actions in sections:
+            content.add_widget(self._make_section_label(title))
+            card = self._make_card()
+            box = BoxLayout(
+                orientation="vertical", spacing=dp(10), padding=[CARD_PADDING] * 4, size_hint_y=None
+            )
+            box.bind(minimum_height=box.setter("height"))
+            desc_label = Label(
+                text=description, color=COLOR_TEXT_SECONDARY, font_size=sp(14),
+                halign="left", valign="middle", size_hint_y=None, height=dp(44)
+            )
+            desc_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+            box.add_widget(desc_label)
+            for text, callback, danger in actions:
+                button = (self._make_danger_button if danger else self._make_secondary_button)(text)
+                button.bind(on_press=callback)
+                box.add_widget(button)
+            card.add_widget(box)
+            content.add_widget(card)
+        screen.add_widget(self._make_page_scroll(content))
+        self.refresh_settings_page()
+        return screen
+
+    def refresh_settings_page(self):
+        if hasattr(self, "settings_records_count_label"):
+            self.settings_records_count_label.text = f"账单记录：{len(self.records)} 条"
+        if hasattr(self, "settings_categories_count_label"):
+            self.settings_categories_count_label.text = f"分类数量：{len(self.categories)} 个"
+
+    def switch_page(self, page_name):
+        """仅切换视图；所有页面继续使用当前 MainScreen 的共享数据。"""
+        if page_name == "records":
+            self.refresh_records_page()
+        elif page_name == "stats":
+            self.refresh_stats_page()
+        elif page_name == "settings":
+            self.refresh_settings_page()
+        self.page_manager.current = page_name
+
+    def refresh_records_page(self):
+        """按既有排序规则刷新明细页最近 50 条记录。"""
+        self.sort_records()
+        self.records_list.clear_widgets()
+        display_records = [record for record in self.records if isinstance(record, dict)][:50]
+        if not display_records:
+            empty = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(164))
+            empty.add_widget(Label(
+                text="暂无记录", color=COLOR_TEXT, size_hint_y=None,
+                height=dp(40), font_size=sp(20), bold=True
+            ))
+            empty.add_widget(Label(
+                text="记一笔消费后会显示在这里", color=COLOR_TEXT_SECONDARY,
+                size_hint_y=None, height=dp(36), font_size=sp(15)
+            ))
+            go_accounting = self._make_secondary_button("去记账")
+            go_accounting.bind(on_press=lambda instance: self.switch_page("accounting"))
+            empty.add_widget(go_accounting)
+            self.records_list.add_widget(empty)
+            return
+        for record in display_records:
+            self.records_list.add_widget(RecordRow(record, self.show_record_detail))
+
+    def show_record_detail(self, record):
+        """显示完整记录，并从当前记录对象发起安全的单条删除流程。"""
+        if not isinstance(record, dict):
+            self.show_popup("提示", "这条记录格式异常，无法查看详情。")
+            return
+        content = BoxLayout(orientation="vertical", spacing=dp(12), padding=CARD_PADDING)
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
+        details = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+        details.bind(minimum_height=details.setter("height"))
+        fields = [
+            ("消费备注", str(record.get("姓名/备注", ""))),
+            ("分类", str(record.get("分类", ""))),
+            ("金额", self._format_record_amount(record)),
+            ("日期", str(record.get("日期", ""))),
         ]
+        record_time = str(record.get("记录时间", "")).strip()
+        if record_time:
+            fields.append(("记录时间", record_time))
 
-        for text, color, callback in buttons:
-            btn = self._make_action_button(text, color, height=dp(48), font_size=sp(17))
-            btn.bind(on_press=callback)
-            button_grid.add_widget(btn)
+        for field_name, value in fields:
+            label = Label(
+                text=f"[color=6B7280]{field_name}[/color]\n{escape_markup(value)}", markup=True,
+                color=COLOR_TEXT, font_size=sp(16), halign="left", valign="middle",
+                size_hint_y=None, height=dp(58)
+            )
+            label.bind(width=lambda inst, val: setattr(inst, "text_size", (val, None)))
+            label.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(58), val[1] + dp(8))))
+            details.add_widget(label)
+        scroll.add_widget(details)
+        content.add_widget(scroll)
 
-        button_card.add_widget(button_grid)
-        content.add_widget(button_card)
+        buttons = BoxLayout(size_hint_y=None, height=CONTROL_HEIGHT, spacing=dp(10))
+        close_button = self._make_text_button("关闭")
+        delete_button = self._make_danger_button("删除记录")
+        buttons.add_widget(close_button)
+        buttons.add_widget(delete_button)
+        content.add_widget(buttons)
 
-        scroll.add_widget(content)
-        root.add_widget(scroll)
-        self.add_widget(root)
+        detail_popup = self._make_popup("记录详情", content, (0.9, 0.72))
+        close_button.bind(on_press=detail_popup.dismiss)
+        delete_button.bind(
+            on_press=lambda instance: self.confirm_record_deletion(record, detail_popup)
+        )
+        detail_popup.open()
+
+    def _format_record_amount(self, record):
+        try:
+            return f"{float(record.get('金额', 0)):.2f} 元"
+        except (TypeError, ValueError):
+            return f"{record.get('金额', '')} 元"
+
+    def confirm_record_deletion(self, record, detail_popup):
+        """二次确认后按对象身份删除，避免连续操作使用过期索引。"""
+        def do_delete(instance):
+            for index, current_record in enumerate(self.records):
+                if current_record is record:
+                    del self.records[index]
+                    self.save_data()
+                    self.update_monthly_expense()
+                    detail_popup.dismiss()
+                    self.refresh_records_page()
+                    return
+
+            detail_popup.dismiss()
+            self.show_popup("提示", "这条记录已不存在。")
+            self.refresh_records_page()
+
+        self.show_confirm_popup(
+            "确认删除", "确定要删除这条记录吗？此操作不可撤销。", do_delete
+        )
+
+    def _handle_back_key(self, window, key, *args):
+        if key == 27 and getattr(self, "page_manager", None) is not None:
+            if self.page_manager.current != "accounting":
+                self.switch_page("accounting")
+                return True
+        return False
+
+    def _unbind_window_keyboard(self, instance, parent):
+        if parent is None:
+            Window.unbind(on_keyboard=self._handle_back_key)
+            if self._success_feedback_event is not None:
+                self._success_feedback_event.cancel()
+                self._success_feedback_event = None
 
     def make_card(self):
         """保留原有方法，供其他可能调用的地方使用"""
@@ -452,8 +834,13 @@ class MainScreen(Screen):
     # =========================
     # 数据处理
     # =========================
+    def _has_exportable_records(self):
+        return any(isinstance(record, dict) for record in self.records)
+
     def sort_records(self):
         def sort_key(record):
+            if not isinstance(record, dict):
+                return datetime.min
             record_time = str(record.get("记录时间", "")).strip()
             date_str = str(record.get("日期", "")).strip()
 
@@ -477,14 +864,16 @@ class MainScreen(Screen):
         try:
             if os.path.exists(self.records_path):
                 with open(self.records_path, "r", encoding="utf-8") as f:
-                    self.records = json.load(f)
+                    loaded_records = json.load(f)
+                    self.records = loaded_records if isinstance(loaded_records, list) else []
 
             if os.path.exists(self.categories_path):
                 with open(self.categories_path, "r", encoding="utf-8") as f:
                     loaded_categories = json.load(f)
-                    for cat in loaded_categories:
-                        if cat not in self.categories:
-                            self.categories.append(cat)
+                    if isinstance(loaded_categories, list):
+                        for cat in loaded_categories:
+                            if isinstance(cat, str) and cat.strip() and cat not in self.categories:
+                                self.categories.append(cat)
 
             self.sort_records()
             self.category_spinner.values = self.categories
@@ -511,6 +900,8 @@ class MainScreen(Screen):
         count = 0
 
         for record in self.records:
+            if not isinstance(record, dict):
+                continue
             try:
                 record_date = datetime.strptime(str(record.get("日期", "")), "%Y-%m-%d")
                 if record_date.strftime("%Y-%m") == current_month:
@@ -525,6 +916,98 @@ class MainScreen(Screen):
     # =========================
     # 记账
     # =========================
+    def _update_record_date_label(self):
+        date_text = self.selected_record_date.strftime("%Y-%m-%d")
+        prefix = "今天" if self.selected_record_date == datetime.now().date() else "已选"
+        self.record_date_label.text = f"{prefix} · {date_text}"
+
+    def open_record_date_popup(self, instance):
+        """使用当前选中日期初始化临时控件，取消时不写回页面状态。"""
+        current_date = self.selected_record_date
+        content = BoxLayout(
+            orientation="vertical", spacing=CARD_SPACING, padding=CARD_PADDING
+        )
+        date_fields = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(82))
+        year_input = self._make_text_input(
+            text=str(current_date.year), input_filter="int"
+        )
+        month_spinner = self._make_spinner(
+            str(current_date.month), [str(i) for i in range(1, 13)]
+        )
+        day_spinner = self._make_spinner(
+            str(current_date.day), [str(i) for i in range(1, 32)]
+        )
+        for label_text, field in (
+            ("年", year_input), ("月", month_spinner), ("日", day_spinner)
+        ):
+            field_box = BoxLayout(orientation="vertical", spacing=dp(4))
+            field_box.add_widget(Label(
+                text=label_text, color=COLOR_TEXT_SECONDARY, font_size=sp(15),
+                size_hint_y=None, height=dp(24)
+            ))
+            field_box.add_widget(field)
+            date_fields.add_widget(field_box)
+        content.add_widget(date_fields)
+
+        actions = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+        today_button = self._make_secondary_button("今天")
+        cancel_button = self._make_text_button("取消")
+        confirm_button = self._make_primary_button("确定", height=dp(48), font_size=sp(17))
+        actions.add_widget(today_button)
+        actions.add_widget(cancel_button)
+        actions.add_widget(confirm_button)
+        content.add_widget(actions)
+
+        popup = self._make_popup("修改日期", content, (0.92, 0.38))
+
+        def use_today(button):
+            today = datetime.now().date()
+            year_input.text = str(today.year)
+            month_spinner.text = str(today.month)
+            day_spinner.text = str(today.day)
+
+        def confirm_date(button):
+            try:
+                year_text = year_input.text.strip()
+                if not year_text:
+                    self.show_popup("错误", "请输入年份。")
+                    return
+                year = int(year_text)
+                if year < 1900 or year > 9999:
+                    self.show_popup("错误", "请输入合理的年份，例如 2026。")
+                    return
+                selected = datetime(
+                    year, int(month_spinner.text), int(day_spinner.text)
+                ).date()
+            except (TypeError, ValueError):
+                self.show_popup("错误", "日期无效，请检查年月日。")
+                return
+            self.selected_record_date = selected
+            self._update_record_date_label()
+            popup.dismiss()
+
+        today_button.bind(on_press=use_today)
+        cancel_button.bind(on_press=popup.dismiss)
+        confirm_button.bind(on_press=confirm_date)
+        popup.open()
+
+    def _hide_record_success(self, dt):
+        if not getattr(self, "record_success_label", None):
+            self._success_feedback_event = None
+            return
+        self.record_success_label.text = ""
+        self.record_success_label.opacity = 0
+        self._success_feedback_event = None
+
+    def _show_record_success(self, amount, note):
+        if self._success_feedback_event is not None:
+            self._success_feedback_event.cancel()
+        self.record_success_label.text = f"已记录 {amount:.2f} 元 · {note}"
+        self.record_success_label.opacity = 1
+        self._success_feedback_event = Clock.schedule_once(
+            self._hide_record_success, 2
+        )
+
     def record_bill(self, instance):
         note = self.name_input.text.strip()
         category = self.category_spinner.text.strip()
@@ -546,25 +1029,7 @@ class MainScreen(Screen):
             self.show_popup("错误", "请输入有效的正数金额。")
             return
 
-        try:
-            year_text = self.year_input.text.strip()
-            if not year_text:
-                self.show_popup("错误", "请输入年份。")
-                return
-
-            year = int(year_text)
-            month = int(self.month_spinner.text)
-            day = int(self.day_spinner.text)
-
-            if year < 1900 or year > 9999:
-                self.show_popup("错误", "请输入合理的年份，例如 2026。")
-                return
-
-            date_obj = datetime(year, month, day)
-            date_str = date_obj.strftime("%Y-%m-%d")
-        except Exception:
-            self.show_popup("错误", "日期无效，请检查年月日。")
-            return
+        date_str = self.selected_record_date.strftime("%Y-%m-%d")
 
         record = {
             "姓名/备注": note,
@@ -580,12 +1045,103 @@ class MainScreen(Screen):
 
         self.name_input.text = ""
         self.amount_input.text = ""
-
-        self.show_popup("成功", f"已记录：\n{note}\n{category} - {amount:.2f}元")
+        self.selected_record_date = datetime.now().date()
+        self._update_record_date_label()
+        self._show_record_success(amount, note)
 
     # =========================
     # 统计
     # =========================
+    def _set_stats_mode(self, mode):
+        """切换页面内统计类型，并立即显示该类型的当前周期。"""
+        if mode not in ("month", "year"):
+            return
+        self.stats_mode = mode
+        month_selected = mode == "month"
+        self.stats_month_button.theme_bg_color.rgba = (
+            COLOR_PRIMARY if month_selected else COLOR_CARD_BG
+        )
+        self.stats_month_button.color = COLOR_WHITE if month_selected else COLOR_TEXT_SECONDARY
+        self.stats_year_button.theme_bg_color.rgba = (
+            COLOR_CARD_BG if month_selected else COLOR_PRIMARY
+        )
+        self.stats_year_button.color = COLOR_TEXT_SECONDARY if month_selected else COLOR_WHITE
+        self.refresh_stats_page(reset_period=True)
+
+    def _on_stats_period_changed(self, spinner, period):
+        """Spinner 的唯一绑定入口，避免刷新选项时重复触发重建。"""
+        if not self._updating_stats_period and period:
+            self.refresh_stats_page()
+
+    def _get_stats_periods(self):
+        """在既有周期提取结果前补充当前周期，且保持历史周期倒序。"""
+        if self.stats_mode == "year":
+            current = datetime.now().strftime("%Y")
+            available = self.get_available_years()
+        else:
+            current = datetime.now().strftime("%Y-%m")
+            available = self.get_available_months()
+        return [current] + [period for period in available if period != current]
+
+    def _build_stats_summary_card(self, period, total, record_count):
+        card = self._make_card()
+        summary = BoxLayout(
+            orientation="vertical", spacing=dp(4), padding=[CARD_PADDING] * 4,
+            size_hint_y=None, height=dp(142)
+        )
+        period_suffix = "年度统计" if self.stats_mode == "year" else "月度统计"
+        summary.add_widget(self._make_stats_label(
+            f"{period}  {period_suffix}", sp(15), dp(24), COLOR_TEXT_SECONDARY, halign="left"
+        ))
+        summary.add_widget(self._make_stats_label(
+            f"{total:.2f} 元", sp(32), dp(58), COLOR_PRIMARY, halign="left"
+        ))
+        summary.add_widget(self._make_stats_label(
+            f"有效记录：{record_count} 条", sp(15), dp(24), COLOR_TEXT_SECONDARY, halign="left"
+        ))
+        card.add_widget(summary)
+        return card
+
+    def refresh_stats_page(self, reset_period=False):
+        """用共享数据重建统计结果；页面控件本身始终只创建一次。"""
+        periods = self._get_stats_periods()
+        current_period = datetime.now().strftime("%Y" if self.stats_mode == "year" else "%Y-%m")
+        selected_period = self.stats_period_spinner.text
+        if reset_period or selected_period not in periods:
+            selected_period = current_period
+
+        self._updating_stats_period = True
+        self.stats_period_spinner.values = periods
+        self.stats_period_spinner.text = selected_period
+        self._updating_stats_period = False
+
+        self.stats_results.clear_widgets()
+        if self.stats_mode == "year":
+            records = self.get_records_for_year(selected_period)
+            empty_text = "暂无本年度消费记录"
+        else:
+            records = self.get_records_for_month(selected_period)
+            empty_text = "暂无本月消费记录"
+
+        category_stats = self.get_category_stats(records)
+        total = sum(amount for category, amount in category_stats)
+        valid_record_count = sum(1 for record in records if self._get_record_amount(record) is not None)
+        self.stats_results.add_widget(
+            self._build_stats_summary_card(selected_period, total, valid_record_count)
+        )
+
+        details_card = self._make_card()
+        details = BoxLayout(
+            orientation="vertical", spacing=dp(12), padding=[CARD_PADDING] * 4, size_hint_y=None
+        )
+        details.bind(minimum_height=details.setter("height"))
+        details.add_widget(self._build_category_stats_section(category_stats, total, empty_text))
+        if self.stats_mode == "year":
+            monthly_totals = self.get_monthly_totals_for_year(selected_period)
+            details.add_widget(self._build_year_monthly_totals_section(monthly_totals))
+        details_card.add_widget(details)
+        self.stats_results.add_widget(details_card)
+
     def show_monthly_stats(self, instance):
         current_month = datetime.now().strftime("%Y-%m")
         self.show_monthly_stats_popup(current_month)
@@ -607,17 +1163,13 @@ class MainScreen(Screen):
             height=dp(26),
             halign="left",
             valign="middle",
-            color=(0.12, 0.22, 0.36, 1)
+            color=COLOR_TEXT
         )
         type_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         content.add_widget(type_label)
 
-        type_spinner = Spinner(
-            text="按月统计" if months else "按年统计",
-            values=("按月统计", "按年统计"),
-            size_hint_y=None,
-            height=dp(48),
-            font_size=sp(18)
+        type_spinner = self._make_spinner(
+            "按月统计" if months else "按年统计", ("按月统计", "按年统计")
         )
         content.add_widget(type_spinner)
 
@@ -628,25 +1180,21 @@ class MainScreen(Screen):
             height=dp(26),
             halign="left",
             valign="middle",
-            color=(0.12, 0.22, 0.36, 1)
+            color=COLOR_TEXT
         )
         period_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         content.add_widget(period_label)
 
         initial_periods = months if type_spinner.text == "按月统计" else years
-        period_spinner = Spinner(
-            text=initial_periods[0] if initial_periods else "",
-            values=initial_periods,
-            size_hint_y=None,
-            height=dp(48),
-            font_size=sp(18)
+        period_spinner = self._make_spinner(
+            initial_periods[0] if initial_periods else "", initial_periods
         )
         content.add_widget(period_spinner)
 
-        btn_view = Button(text="查看统计", size_hint_y=None, height=dp(46), font_size=sp(18))
-        btn_close = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
+        btn_view = self._make_primary_button("查看统计")
+        btn_close = self._make_text_button("关闭")
 
-        popup = Popup(title="历史统计", content=content, size_hint=(0.90, 0.52), auto_dismiss=False)
+        popup = self._make_popup("历史统计", content, (0.90, 0.56))
 
         def update_periods(spinner, text):
             periods = months if text == "按月统计" else years
@@ -672,12 +1220,16 @@ class MainScreen(Screen):
         popup.open()
 
     def _get_record_date(self, record):
+        if not isinstance(record, dict):
+            return None
         try:
             return datetime.strptime(str(record.get("日期", "")), "%Y-%m-%d")
         except Exception:
             return None
 
     def _get_record_amount(self, record):
+        if not isinstance(record, dict):
+            return None
         try:
             amount = float(record.get("金额", 0))
             return amount if amount > 0 else None
@@ -773,7 +1325,7 @@ class MainScreen(Screen):
             height=dp(46),
             halign="left",
             valign="middle",
-            color=(0.12, 0.12, 0.12, 1)
+            color=COLOR_TEXT
         )
         category_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         row.add_widget(category_label)
@@ -787,7 +1339,7 @@ class MainScreen(Screen):
             height=dp(46),
             halign="right",
             valign="middle",
-            color=(0.12, 0.12, 0.12, 1)
+            color=COLOR_TEXT
         )
         amount_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         row.add_widget(amount_label)
@@ -805,14 +1357,14 @@ class MainScreen(Screen):
                 empty_text,
                 sp(17),
                 dp(110),
-                (0.45, 0.45, 0.45, 1)
+                COLOR_TEXT_SECONDARY
             ))
 
         section.add_widget(self._make_stats_label(
             "分类明细",
             sp(17),
             dp(28),
-            (0.12, 0.22, 0.36, 1),
+            COLOR_TEXT,
             halign="left"
         ))
 
@@ -826,7 +1378,7 @@ class MainScreen(Screen):
                 empty_text,
                 sp(16),
                 dp(52),
-                (0.45, 0.45, 0.45, 1)
+                COLOR_TEXT_SECONDARY
             ))
         return section
 
@@ -839,7 +1391,7 @@ class MainScreen(Screen):
             height=dp(38),
             halign="left",
             valign="middle",
-            color=(0.12, 0.12, 0.12, 1)
+            color=COLOR_TEXT
         )
         month_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         row.add_widget(month_label)
@@ -851,7 +1403,7 @@ class MainScreen(Screen):
             height=dp(38),
             halign="right",
             valign="middle",
-            color=(0.12, 0.12, 0.12, 1)
+            color=COLOR_TEXT
         )
         amount_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         row.add_widget(amount_label)
@@ -864,7 +1416,7 @@ class MainScreen(Screen):
             "1月至12月支出明细",
             sp(17),
             dp(30),
-            (0.12, 0.22, 0.36, 1),
+            COLOR_TEXT,
             halign="left"
         ))
         for month in range(1, 13):
@@ -906,13 +1458,13 @@ class MainScreen(Screen):
             title_text,
             sp(20),
             dp(34),
-            (0.12, 0.22, 0.36, 1)
+            COLOR_TEXT
         ))
         content.add_widget(self._make_stats_label(
             total_text,
             sp(18),
             dp(32),
-            (0.18, 0.45, 0.25, 1)
+            COLOR_SUCCESS
         ))
 
         scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
@@ -926,10 +1478,10 @@ class MainScreen(Screen):
         scroll.add_widget(scroll_content)
         content.add_widget(scroll)
 
-        btn_close = Button(text="关闭", size_hint_y=None, height=dp(44), font_size=sp(17))
+        btn_close = self._make_text_button("关闭")
         content.add_widget(btn_close)
 
-        popup = Popup(title=popup_title, content=content, size_hint=(0.94, 0.90), auto_dismiss=False)
+        popup = self._make_popup(popup_title, content, (0.94, 0.90))
         btn_close.bind(on_press=popup.dismiss)
         popup.open()
 
@@ -940,62 +1492,59 @@ class MainScreen(Screen):
         content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
 
         scroll = ScrollView(size_hint=(1, 1))
-        grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-        grid.bind(minimum_height=grid.setter("height"))
+        self.categories_grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        self.categories_grid.bind(minimum_height=self.categories_grid.setter("height"))
+        scroll.add_widget(self.categories_grid)
+        content.add_widget(scroll)
 
+        self.new_category_input = self._make_text_input(hint_text="输入新分类")
+        content.add_widget(self.new_category_input)
+
+        add_btn = self._make_primary_button("添加分类")
+        add_btn.bind(on_press=self.add_category)
+        content.add_widget(add_btn)
+
+        close_btn = self._make_text_button("关闭")
+        content.add_widget(close_btn)
+
+        popup = self._make_popup("分类设置", content, (0.9, 0.9))
+        self._categories_popup = popup
+        close_btn.bind(on_press=popup.dismiss)
+        popup.bind(on_dismiss=self._clear_categories_popup_refs)
+        self._refresh_categories_grid()
+        popup.open()
+
+    def _clear_categories_popup_refs(self, instance):
+        if getattr(self, "_categories_popup", None) is instance:
+            self._categories_popup = None
+            self.categories_grid = None
+            self.new_category_input = None
+
+    def _refresh_categories_grid(self):
+        grid = getattr(self, "categories_grid", None)
+        if grid is None:
+            return
+
+        grid.clear_widgets()
         for category in self.categories:
             row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
-            row.add_widget(Label(text=category, font_size=sp(17), halign="left", valign="middle"))
-
-            delete_btn = Button(
-                text="删除",
-                size_hint=(0.28, 1),
-                font_size=sp(16),
-                background_normal="",
-                background_color=(0.80, 0.30, 0.25, 1),
-                color=(1, 1, 1, 1)
+            name_label = Label(
+                text=category, color=COLOR_TEXT, font_size=sp(17), halign="left", valign="middle"
             )
-            delete_btn.bind(on_press=lambda btn, cat=category: self.delete_category(cat))
+            name_label.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+            row.add_widget(name_label)
+
+            delete_btn = self._make_danger_button("删除", font_size=sp(16))
+            delete_btn.size_hint = (0.28, 1)
+            delete_btn.bind(on_press=lambda btn, cat=category: self.confirm_delete_category(cat))
             row.add_widget(delete_btn)
 
             grid.add_widget(row)
 
-        scroll.add_widget(grid)
-        content.add_widget(scroll)
-
-        self.new_category_input = TextInput(
-            hint_text="输入新分类",
-            multiline=False,
-            size_hint_y=None,
-            height=dp(46),
-            font_size=sp(18),
-            background_normal="",
-            background_active="",
-            background_color=(0.96, 0.96, 0.96, 1),
-            foreground_color=(0, 0, 0, 1),
-            cursor_color=(0, 0, 0, 1),
-            padding=[dp(10), dp(10), dp(10), dp(10)]
-        )
-        content.add_widget(self.new_category_input)
-
-        add_btn = Button(
-            text="添加分类",
-            size_hint_y=None,
-            height=dp(46),
-            font_size=sp(18),
-            background_normal="",
-            background_color=(0.20, 0.60, 0.35, 1),
-            color=(1, 1, 1, 1)
-        )
-        add_btn.bind(on_press=self.add_category)
-        content.add_widget(add_btn)
-
-        close_btn = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
-        content.add_widget(close_btn)
-
-        popup = Popup(title="分类设置", content=content, size_hint=(0.9, 0.9), auto_dismiss=False)
-        close_btn.bind(on_press=popup.dismiss)
-        popup.open()
+    def _sync_category_spinner(self, removed_category=None):
+        self.category_spinner.values = self.categories
+        if self.categories and (self.category_spinner.text not in self.categories or self.category_spinner.text == removed_category):
+            self.category_spinner.text = self.categories[0]
 
     def add_category(self, instance):
         new_category = self.new_category_input.text.strip()
@@ -1008,25 +1557,32 @@ class MainScreen(Screen):
             return
 
         self.categories.append(new_category)
-        self.category_spinner.values = self.categories
+        self._sync_category_spinner()
         self.save_data()
         self.new_category_input.text = ""
+        self._refresh_categories_grid()
+        self.refresh_settings_page()
         self.show_popup("成功", f"已添加分类：{new_category}")
+
+    def confirm_delete_category(self, category):
+        message = f"确定要删除分类“{category}”吗？\n历史账单中的分类记录不会被修改。"
+        self.show_confirm_popup("确认删除分类", message, lambda btn: self.delete_category(category))
 
     def delete_category(self, category):
         if category not in self.categories:
+            self._refresh_categories_grid()
             return
 
         if len(self.categories) <= 1:
             self.show_popup("提示", "至少保留一个分类。")
+            self._refresh_categories_grid()
             return
 
         self.categories.remove(category)
-        self.category_spinner.values = self.categories
-        if self.category_spinner.text == category and self.categories:
-            self.category_spinner.text = self.categories[0]
-
+        self._sync_category_spinner(removed_category=category)
         self.save_data()
+        self._refresh_categories_grid()
+        self.refresh_settings_page()
         self.show_popup("成功", f"已删除分类：{category}")
 
     # =========================
@@ -1044,22 +1600,26 @@ class MainScreen(Screen):
         grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         grid.bind(minimum_height=grid.setter("height"))
 
-        display_records = self.records[:50]
+        display_records = [record for record in self.records if isinstance(record, dict)][:50]
 
         for record in display_records:
             note = str(record.get("姓名/备注", ""))
             category = str(record.get("分类", ""))
-            amount = float(record.get("金额", 0))
+            try:
+                amount_text = f"{float(record.get('金额', 0)):.2f}"
+            except (TypeError, ValueError):
+                amount_text = str(record.get("金额", ""))
             date_str = str(record.get("日期", ""))
 
-            text = f"{date_str}  {category}\n{amount:.2f}元  {note}"
+            text = f"{date_str}  {category}\n{amount_text}元  {note}"
             row = Label(
                 text=text,
                 font_size=sp(16),
                 size_hint_y=None,
                 height=dp(62),
                 halign="left",
-                valign="middle"
+                valign="middle",
+                color=COLOR_TEXT
             )
             row.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(10), None)))
             grid.add_widget(row)
@@ -1067,15 +1627,10 @@ class MainScreen(Screen):
         scroll.add_widget(grid)
         content.add_widget(scroll)
 
-        close_btn = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
+        close_btn = self._make_text_button("关闭")
         content.add_widget(close_btn)
 
-        popup = Popup(
-            title="查看记录（最近50条）",
-            content=content,
-            size_hint=(0.92, 0.9),
-            auto_dismiss=False
-        )
+        popup = self._make_popup("查看记录（最近50条）", content, (0.92, 0.9))
         close_btn.bind(on_press=popup.dismiss)
         popup.open()
 
@@ -1094,14 +1649,43 @@ class MainScreen(Screen):
         grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         grid.bind(minimum_height=grid.setter("height"))
 
-        display_records = list(enumerate(self.records[:20]))
+        self._delete_records_grid = grid
 
-        for real_index, record in display_records:
+        scroll.add_widget(grid)
+        content.add_widget(scroll)
+
+        clear_btn = self._make_danger_button("清空所有记录")
+        clear_btn.bind(on_press=self.clear_all_records)
+        content.add_widget(clear_btn)
+
+        close_btn = self._make_text_button("关闭")
+        content.add_widget(close_btn)
+
+        popup = self._make_popup("删除记录（最近20条）", content, (0.92, 0.9))
+        self._delete_records_popup = popup
+        close_btn.bind(on_press=popup.dismiss)
+        popup.bind(on_dismiss=self._clear_delete_records_popup)
+        self._rebuild_delete_records_grid()
+        popup.open()
+
+    def _rebuild_delete_records_grid(self):
+        """根据当前记录重建删除窗口，始终只展示最近 20 条。"""
+        grid = getattr(self, "_delete_records_grid", None)
+        if grid is None:
+            return
+
+        grid.clear_widgets()
+        display_records = [record for record in self.records if isinstance(record, dict)][:20]
+        for record in display_records:
             row = BoxLayout(size_hint_y=None, height=dp(68), spacing=dp(8))
 
+            try:
+                amount_text = f"{float(record.get('金额', 0)):.2f}"
+            except (TypeError, ValueError):
+                amount_text = str(record.get("金额", ""))
             record_text = (
                 f"{record.get('日期', '')} {record.get('分类', '')}\n"
-                f"{float(record.get('金额', 0)):.2f}元 {str(record.get('姓名/备注', ''))[:14]}"
+                f"{amount_text}元 {str(record.get('姓名/备注', ''))[:14]}"
             )
 
             info_label = Label(
@@ -1109,63 +1693,48 @@ class MainScreen(Screen):
                 font_size=sp(15),
                 size_hint=(0.72, 1),
                 halign="left",
-                valign="middle"
+                valign="middle",
+                color=COLOR_TEXT
             )
             info_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(6), None)))
             row.add_widget(info_label)
 
-            delete_btn = Button(
-                text="删除",
-                font_size=sp(16),
-                size_hint=(0.28, 1),
-                background_normal="",
-                background_color=(0.80, 0.30, 0.25, 1),
-                color=(1, 1, 1, 1)
-            )
-            delete_btn.bind(on_press=lambda btn, idx=real_index: self.delete_single_record(idx))
+            delete_btn = self._make_danger_button("删除", font_size=sp(16))
+            delete_btn.size_hint = (0.28, 1)
+            delete_btn.bind(on_press=lambda btn, item=record: self.delete_single_record(item))
             row.add_widget(delete_btn)
 
             grid.add_widget(row)
 
-        scroll.add_widget(grid)
-        content.add_widget(scroll)
+    def _clear_delete_records_popup(self, instance):
+        if getattr(self, "_delete_records_popup", None) is instance:
+            self._delete_records_popup = None
+            self._delete_records_grid = None
 
-        clear_btn = Button(
-            text="清空所有记录",
-            size_hint_y=None,
-            height=dp(44),
-            font_size=sp(17),
-            background_normal="",
-            background_color=(0.80, 0.30, 0.25, 1),
-            color=(1, 1, 1, 1)
-        )
-        clear_btn.bind(on_press=self.clear_all_records)
-        content.add_widget(clear_btn)
-
-        close_btn = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
-        content.add_widget(close_btn)
-
-        popup = Popup(
-            title="删除记录（最近20条）",
-            content=content,
-            size_hint=(0.92, 0.9),
-            auto_dismiss=False
-        )
-        close_btn.bind(on_press=popup.dismiss)
-        popup.open()
-
-    def delete_single_record(self, index):
-        if 0 <= index < len(self.records):
-            del self.records[index]
-            self.save_data()
-            self.update_monthly_expense()
-            self.show_popup("成功", "记录已删除。")
+    def delete_single_record(self, record):
+        # 使用对象身份而非旧索引，避免窗口内连续删除时删错记录。
+        for index, current_record in enumerate(self.records):
+            if current_record is record:
+                del self.records[index]
+                self.save_data()
+                self.update_monthly_expense()
+                if self.records:
+                    self._rebuild_delete_records_grid()
+                else:
+                    popup = getattr(self, "_delete_records_popup", None)
+                    if popup is not None:
+                        popup.dismiss()
+                return
 
     def clear_all_records(self, instance):
         def do_clear(btn):
             self.records = []
             self.save_data()
             self.update_monthly_expense()
+            self.refresh_settings_page()
+            popup = getattr(self, "_delete_records_popup", None)
+            if popup is not None:
+                popup.dismiss()
             self.show_popup("成功", "所有记录已清空。")
 
         self.show_confirm_popup("确认清空", "确定要清空所有记录吗？此操作不可撤销。", do_clear)
@@ -1174,18 +1743,14 @@ class MainScreen(Screen):
     # 导出
     # =========================
     def export_data(self, instance):
-        if not self.records:
-            self.show_popup("提示", "暂无记录可导出。")
-            return
-
         content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
 
-        btn_xlsx = Button(text="导出为 Excel", size_hint_y=None, height=dp(48), font_size=sp(18))
-        btn_csv = Button(text="导出为 CSV", size_hint_y=None, height=dp(48), font_size=sp(18))
-        btn_json = Button(text="导出为 JSON", size_hint_y=None, height=dp(48), font_size=sp(18))
-        btn_close = Button(text="关闭", size_hint_y=None, height=dp(42), font_size=sp(17))
+        btn_xlsx = self._make_secondary_button("导出 Excel：账单表格")
+        btn_csv = self._make_secondary_button("导出 CSV：账单表格")
+        btn_json = self._make_secondary_button("导出完整备份 JSON：账单和分类")
+        btn_close = self._make_text_button("关闭")
 
-        popup = Popup(title="导出数据", content=content, size_hint=(0.86, 0.48), auto_dismiss=False)
+        popup = self._make_popup("导出数据", content, (0.86, 0.54))
 
         btn_xlsx.bind(on_press=lambda btn: self.export_to_excel(popup))
         btn_csv.bind(on_press=lambda btn: self.export_to_csv(popup))
@@ -1219,6 +1784,8 @@ class MainScreen(Screen):
         ws.append(self._get_export_fieldnames())
 
         for record in self.records:
+            if not isinstance(record, dict):
+                continue
             ws.append([
                 record.get("姓名/备注", ""),
                 record.get("分类", ""),
@@ -1237,6 +1804,8 @@ class MainScreen(Screen):
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for record in self.records:
+                if not isinstance(record, dict):
+                    continue
                 writer.writerow({
                     "姓名/备注": record.get("姓名/备注", ""),
                     "分类": record.get("分类", ""),
@@ -1248,8 +1817,12 @@ class MainScreen(Screen):
 
     def _create_json_temp_file(self, timestamp):
         temp_path = os.path.join(self.storage_dir, f"export_temp_{timestamp}.json")
+        backup_data = {
+            "records": self.records,
+            "categories": self.categories
+        }
         with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(self.records, f, ensure_ascii=False, indent=2)
+            json.dump(backup_data, f, ensure_ascii=False, indent=2)
         return temp_path
 
     def _create_export_temp_file(self, export_type, timestamp):
@@ -1289,11 +1862,14 @@ class MainScreen(Screen):
                 "request_code": 5103,
                 "extension": "json",
                 "mime_type": "application/json",
-                "success_message": "JSON 导出成功"
+                "success_message": "完整备份 JSON 导出成功"
             }
         }
         config = configs[export_type].copy()
-        config["filename"] = f"记账记录_{timestamp}.{config['extension']}"
+        if export_type == "json":
+            config["filename"] = f"个人记账完整备份_{timestamp}.json"
+        else:
+            config["filename"] = f"记账记录_{timestamp}.{config['extension']}"
         return config
 
     def _ensure_android_export_binding(self):
@@ -1305,7 +1881,7 @@ class MainScreen(Screen):
             self._android_export_bound = True
 
     def _start_android_document_export(self, export_type, popup=None):
-        if not self.records:
+        if export_type != "json" and not self._has_exportable_records():
             self.show_popup("提示", "暂无记录可导出。")
             return
 
@@ -1420,6 +1996,9 @@ class MainScreen(Screen):
             output_stream.close()
 
     def export_to_excel(self, popup=None):
+        if not self._has_exportable_records():
+            self.show_popup("提示", "暂无记录可导出。")
+            return
         if self._is_android():
             self._start_android_document_export("excel", popup)
             return
@@ -1443,6 +2022,9 @@ class MainScreen(Screen):
             self.show_popup("错误", f"导出失败：\n{self._format_exception(e)}")
 
     def export_to_csv(self, popup=None):
+        if not self._has_exportable_records():
+            self.show_popup("提示", "暂无记录可导出。")
+            return
         if self._is_android():
             self._start_android_document_export("csv", popup)
             return
@@ -1473,7 +2055,7 @@ class MainScreen(Screen):
             self.sort_records()
             export_dir = self.get_export_dir()
             timestamp = self._get_export_timestamp()
-            filename = f"记账记录_{timestamp}.json"
+            filename = f"个人记账完整备份_{timestamp}.json"
             file_path = os.path.join(export_dir, filename)
             temp_path = self._create_json_temp_file(timestamp)
             try:
@@ -1506,13 +2088,15 @@ class MainScreen(Screen):
         content.add_widget(chooser)
 
         btn_box = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(10))
-        btn_import = Button(text="导入", font_size=sp(17))
-        btn_cancel = Button(text="取消", font_size=sp(17))
+        btn_import = self._make_primary_button("导入")
+        btn_import.size_hint_y = 1
+        btn_cancel = self._make_text_button("取消")
+        btn_cancel.size_hint_y = 1
         btn_box.add_widget(btn_import)
         btn_box.add_widget(btn_cancel)
         content.add_widget(btn_box)
 
-        popup = Popup(title="选择要导入的数据文件", content=content, size_hint=(0.94, 0.92), auto_dismiss=False)
+        popup = self._make_popup("选择要导入的数据文件", content, (0.94, 0.92))
 
         def do_import(btn):
             if not chooser.selection:
@@ -1659,10 +2243,28 @@ class MainScreen(Screen):
     def import_file(self, file_path):
         try:
             imported_records = []
+            imported_categories = None
+            import_kind = "records"
 
             if file_path.lower().endswith(".json"):
                 with open(file_path, "r", encoding="utf-8") as f:
-                    imported_records = json.load(f)
+                    json_data = json.load(f)
+
+                if isinstance(json_data, dict):
+                    if "records" not in json_data and "categories" not in json_data:
+                        self.show_popup("导入失败", "文件内容格式不正确。")
+                        return
+                    imported_records = json_data.get("records", [])
+                    imported_categories = json_data.get("categories", [])
+                    if not isinstance(imported_records, list) or not isinstance(imported_categories, list):
+                        self.show_popup("导入失败", "文件内容格式不正确。")
+                        return
+                    import_kind = "backup"
+                elif isinstance(json_data, list) and all(isinstance(item, str) for item in json_data):
+                    imported_categories = json_data
+                    import_kind = "categories"
+                else:
+                    imported_records = json_data
 
             elif file_path.lower().endswith(".csv"):
                 with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
@@ -1757,16 +2359,32 @@ class MainScreen(Screen):
                 new_categories.add(clean_category)
                 existing_keys.add(key)
 
-            if not valid_records and duplicate_count > 0:
+            if import_kind == "records" and not valid_records and duplicate_count > 0:
                 self.show_popup("导入完成", f"没有新增记录。\n检测到 {duplicate_count} 条重复记录，已自动跳过。")
                 return
 
-            if not valid_records:
+            if import_kind == "records" and not valid_records:
                 self.show_popup("导入失败", "文件中没有找到可导入的有效记录。")
                 return
 
             self.records.extend(valid_records)
-            self.sort_records()
+            if valid_records:
+                self.sort_records()
+
+            added_category_count = 0
+            duplicate_category_count = 0
+            if imported_categories is not None:
+                for category in imported_categories:
+                    if not isinstance(category, str):
+                        continue
+                    clean_category = category.strip()
+                    if not clean_category:
+                        continue
+                    if clean_category in self.categories:
+                        duplicate_category_count += 1
+                        continue
+                    self.categories.append(clean_category)
+                    added_category_count += 1
 
             for cat in sorted(new_categories):
                 if cat and cat not in self.categories:
@@ -1778,11 +2396,26 @@ class MainScreen(Screen):
 
             self.save_data()
             self.update_monthly_expense()
+            self.refresh_settings_page()
 
-            self.show_popup(
-                "导入成功",
-                f"成功导入 {len(valid_records)} 条记录。\n自动跳过 {duplicate_count} 条重复记录。"
-            )
+            if import_kind == "categories":
+                self.show_popup(
+                    "导入完成",
+                    f"新增分类 {added_category_count} 个。\n重复分类 {duplicate_category_count} 个。"
+                )
+            elif import_kind == "backup":
+                self.show_popup(
+                    "导入完成",
+                    f"成功导入 {len(valid_records)} 条记录。\n"
+                    f"自动跳过 {duplicate_count} 条重复记录。\n"
+                    f"新增分类 {added_category_count} 个。\n"
+                    f"重复分类 {duplicate_category_count} 个。"
+                )
+            else:
+                self.show_popup(
+                    "导入成功",
+                    f"成功导入 {len(valid_records)} 条记录。\n自动跳过 {duplicate_count} 条重复记录。"
+                )
 
         except Exception as e:
             self.show_popup("导入失败", f"发生错误：\n{str(e)}")
@@ -1791,46 +2424,69 @@ class MainScreen(Screen):
     # 通用弹窗
     # =========================
     def show_popup(self, title, message):
-        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
+        content = BoxLayout(orientation="vertical", spacing=CARD_SPACING, padding=CARD_PADDING)
+
+        if "成功" in title or "导入完成" in title:
+            status_color = COLOR_SUCCESS
+            status_background = COLOR_SUCCESS_LIGHT
+        elif "错误" in title or "失败" in title:
+            status_color = COLOR_DANGER
+            status_background = COLOR_DANGER_LIGHT
+        else:
+            status_color = COLOR_PRIMARY
+            status_background = COLOR_PRIMARY_LIGHT
+
+        self._add_rounded_background(content, status_background, INPUT_RADIUS)
 
         msg = Label(
             text=message,
             font_size=sp(17),
             halign="center",
-            valign="middle"
+            valign="middle",
+            color=status_color
         )
         msg.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(8), None)))
         content.add_widget(msg)
 
-        btn = Button(text="确定", size_hint_y=None, height=dp(42), font_size=sp(17))
+        btn = self._make_button("确定", status_color, COLOR_WHITE)
         content.add_widget(btn)
 
-        popup = Popup(title=title, content=content, size_hint=(0.86, 0.42), auto_dismiss=False)
+        popup = self._make_popup(title, content, (0.88, 0.42))
         btn.bind(on_press=popup.dismiss)
         popup.open()
 
     def show_confirm_popup(self, title, message, confirm_callback):
-        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
+        content = BoxLayout(orientation="vertical", spacing=CARD_SPACING, padding=CARD_PADDING)
 
         msg = Label(
             text=message,
             font_size=sp(17),
             halign="center",
-            valign="middle"
+            valign="middle",
+            color=COLOR_TEXT
         )
         msg.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0] - dp(8), None)))
         content.add_widget(msg)
 
-        btn_box = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(10))
-        btn_ok = Button(text="确定", font_size=sp(17))
-        btn_cancel = Button(text="取消", font_size=sp(17))
+        btn_box = BoxLayout(size_hint_y=None, height=CONTROL_HEIGHT, spacing=dp(10))
+        is_danger = "删除" in title or "清空" in title
+        btn_ok = (self._make_danger_button if is_danger else self._make_primary_button)("确定")
+        btn_ok.size_hint_y = 1
+        btn_cancel = self._make_text_button("取消")
+        btn_cancel.size_hint_y = 1
         btn_box.add_widget(btn_ok)
         btn_box.add_widget(btn_cancel)
         content.add_widget(btn_box)
 
-        popup = Popup(title=title, content=content, size_hint=(0.86, 0.42), auto_dismiss=False)
+        popup = self._make_popup(title, content, (0.88, 0.42))
+
+        confirmed = {"done": False}
 
         def do_confirm(btn):
+            if confirmed["done"]:
+                return
+            confirmed["done"] = True
+            btn.disabled = True
             popup.dismiss()
             confirm_callback(btn)
 
