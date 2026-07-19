@@ -719,7 +719,8 @@ class MainScreen(Screen):
         """按既有排序规则刷新明细页最近 50 条记录。"""
         self.sort_records()
         self.records_list.clear_widgets()
-        if not self.records:
+        display_records = [record for record in self.records if isinstance(record, dict)][:50]
+        if not display_records:
             empty = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(164))
             empty.add_widget(Label(
                 text="暂无记录", color=COLOR_TEXT, size_hint_y=None,
@@ -734,11 +735,14 @@ class MainScreen(Screen):
             empty.add_widget(go_accounting)
             self.records_list.add_widget(empty)
             return
-        for record in self.records[:50]:
+        for record in display_records:
             self.records_list.add_widget(RecordRow(record, self.show_record_detail))
 
     def show_record_detail(self, record):
         """显示完整记录，并从当前记录对象发起安全的单条删除流程。"""
+        if not isinstance(record, dict):
+            self.show_popup("提示", "这条记录格式异常，无法查看详情。")
+            return
         content = BoxLayout(orientation="vertical", spacing=dp(12), padding=CARD_PADDING)
         scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
         details = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
@@ -815,6 +819,9 @@ class MainScreen(Screen):
     def _unbind_window_keyboard(self, instance, parent):
         if parent is None:
             Window.unbind(on_keyboard=self._handle_back_key)
+            if self._success_feedback_event is not None:
+                self._success_feedback_event.cancel()
+                self._success_feedback_event = None
 
     def make_card(self):
         """保留原有方法，供其他可能调用的地方使用"""
@@ -827,8 +834,13 @@ class MainScreen(Screen):
     # =========================
     # 数据处理
     # =========================
+    def _has_exportable_records(self):
+        return any(isinstance(record, dict) for record in self.records)
+
     def sort_records(self):
         def sort_key(record):
+            if not isinstance(record, dict):
+                return datetime.min
             record_time = str(record.get("记录时间", "")).strip()
             date_str = str(record.get("日期", "")).strip()
 
@@ -852,14 +864,16 @@ class MainScreen(Screen):
         try:
             if os.path.exists(self.records_path):
                 with open(self.records_path, "r", encoding="utf-8") as f:
-                    self.records = json.load(f)
+                    loaded_records = json.load(f)
+                    self.records = loaded_records if isinstance(loaded_records, list) else []
 
             if os.path.exists(self.categories_path):
                 with open(self.categories_path, "r", encoding="utf-8") as f:
                     loaded_categories = json.load(f)
-                    for cat in loaded_categories:
-                        if cat not in self.categories:
-                            self.categories.append(cat)
+                    if isinstance(loaded_categories, list):
+                        for cat in loaded_categories:
+                            if isinstance(cat, str) and cat.strip() and cat not in self.categories:
+                                self.categories.append(cat)
 
             self.sort_records()
             self.category_spinner.values = self.categories
@@ -886,6 +900,8 @@ class MainScreen(Screen):
         count = 0
 
         for record in self.records:
+            if not isinstance(record, dict):
+                continue
             try:
                 record_date = datetime.strptime(str(record.get("日期", "")), "%Y-%m-%d")
                 if record_date.strftime("%Y-%m") == current_month:
@@ -976,6 +992,9 @@ class MainScreen(Screen):
         popup.open()
 
     def _hide_record_success(self, dt):
+        if not getattr(self, "record_success_label", None):
+            self._success_feedback_event = None
+            return
         self.record_success_label.text = ""
         self.record_success_label.opacity = 0
         self._success_feedback_event = None
@@ -1201,12 +1220,16 @@ class MainScreen(Screen):
         popup.open()
 
     def _get_record_date(self, record):
+        if not isinstance(record, dict):
+            return None
         try:
             return datetime.strptime(str(record.get("日期", "")), "%Y-%m-%d")
         except Exception:
             return None
 
     def _get_record_amount(self, record):
+        if not isinstance(record, dict):
+            return None
         try:
             amount = float(record.get("金额", 0))
             return amount if amount > 0 else None
@@ -1485,9 +1508,17 @@ class MainScreen(Screen):
         content.add_widget(close_btn)
 
         popup = self._make_popup("分类设置", content, (0.9, 0.9))
+        self._categories_popup = popup
         close_btn.bind(on_press=popup.dismiss)
+        popup.bind(on_dismiss=self._clear_categories_popup_refs)
         self._refresh_categories_grid()
         popup.open()
+
+    def _clear_categories_popup_refs(self, instance):
+        if getattr(self, "_categories_popup", None) is instance:
+            self._categories_popup = None
+            self.categories_grid = None
+            self.new_category_input = None
 
     def _refresh_categories_grid(self):
         grid = getattr(self, "categories_grid", None)
@@ -1569,15 +1600,18 @@ class MainScreen(Screen):
         grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         grid.bind(minimum_height=grid.setter("height"))
 
-        display_records = self.records[:50]
+        display_records = [record for record in self.records if isinstance(record, dict)][:50]
 
         for record in display_records:
             note = str(record.get("姓名/备注", ""))
             category = str(record.get("分类", ""))
-            amount = float(record.get("金额", 0))
+            try:
+                amount_text = f"{float(record.get('金额', 0)):.2f}"
+            except (TypeError, ValueError):
+                amount_text = str(record.get("金额", ""))
             date_str = str(record.get("日期", ""))
 
-            text = f"{date_str}  {category}\n{amount:.2f}元  {note}"
+            text = f"{date_str}  {category}\n{amount_text}元  {note}"
             row = Label(
                 text=text,
                 font_size=sp(16),
@@ -1641,12 +1675,17 @@ class MainScreen(Screen):
             return
 
         grid.clear_widgets()
-        for record in self.records[:20]:
+        display_records = [record for record in self.records if isinstance(record, dict)][:20]
+        for record in display_records:
             row = BoxLayout(size_hint_y=None, height=dp(68), spacing=dp(8))
 
+            try:
+                amount_text = f"{float(record.get('金额', 0)):.2f}"
+            except (TypeError, ValueError):
+                amount_text = str(record.get("金额", ""))
             record_text = (
                 f"{record.get('日期', '')} {record.get('分类', '')}\n"
-                f"{float(record.get('金额', 0)):.2f}元 {str(record.get('姓名/备注', ''))[:14]}"
+                f"{amount_text}元 {str(record.get('姓名/备注', ''))[:14]}"
             )
 
             info_label = Label(
@@ -1745,6 +1784,8 @@ class MainScreen(Screen):
         ws.append(self._get_export_fieldnames())
 
         for record in self.records:
+            if not isinstance(record, dict):
+                continue
             ws.append([
                 record.get("姓名/备注", ""),
                 record.get("分类", ""),
@@ -1763,6 +1804,8 @@ class MainScreen(Screen):
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for record in self.records:
+                if not isinstance(record, dict):
+                    continue
                 writer.writerow({
                     "姓名/备注": record.get("姓名/备注", ""),
                     "分类": record.get("分类", ""),
@@ -1838,7 +1881,7 @@ class MainScreen(Screen):
             self._android_export_bound = True
 
     def _start_android_document_export(self, export_type, popup=None):
-        if export_type != "json" and not self.records:
+        if export_type != "json" and not self._has_exportable_records():
             self.show_popup("提示", "暂无记录可导出。")
             return
 
@@ -1953,6 +1996,9 @@ class MainScreen(Screen):
             output_stream.close()
 
     def export_to_excel(self, popup=None):
+        if not self._has_exportable_records():
+            self.show_popup("提示", "暂无记录可导出。")
+            return
         if self._is_android():
             self._start_android_document_export("excel", popup)
             return
@@ -1976,6 +2022,9 @@ class MainScreen(Screen):
             self.show_popup("错误", f"导出失败：\n{self._format_exception(e)}")
 
     def export_to_csv(self, popup=None):
+        if not self._has_exportable_records():
+            self.show_popup("提示", "暂无记录可导出。")
+            return
         if self._is_android():
             self._start_android_document_export("csv", popup)
             return
@@ -2431,7 +2480,13 @@ class MainScreen(Screen):
 
         popup = self._make_popup(title, content, (0.88, 0.42))
 
+        confirmed = {"done": False}
+
         def do_confirm(btn):
+            if confirmed["done"]:
+                return
+            confirmed["done"] = True
+            btn.disabled = True
             popup.dismiss()
             confirm_callback(btn)
 
