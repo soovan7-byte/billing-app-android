@@ -1,5 +1,70 @@
-﻿records.json
-categories.json
-.aider*
-.venv/
+# Python cache
 __pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Buildozer / python-for-android build outputs
+.buildozer/
+bin/
+.gradle/
+build/
+dist/
+*.egg-info/
+
+# Android packages and signing files
+*.apk
+*.aab
+*.apks
+*.keystore
+*.jks
+key.properties
+keystore.properties
+signing.properties
+
+# IDE / editor files
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local app data
+records.json
+categories.json
+
+# Import/export temporary files
+export_temp_*.xlsx
+export_temp_*.csv
+export_temp_*.json
+import_temp_*.xlsx
+import_temp_*.csv
+import_temp_*.json
+
+# User exported bills and backups
+记账记录_*.xlsx
+记账记录_*.csv
+个人记账完整备份_*.json
+*账单*.xlsx
+*账单*.csv
+*账单*.json
+*备份*.json
+*backup*.json
+*backup*.csv
+*backup*.xlsx
+
+# Assistant/local tooling
+.aider*
