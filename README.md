@@ -226,12 +226,18 @@ CSV 导出用于表格软件或其他程序读取：
 ### 项目结构
 
 ```text
-.
-├── .github/workflows/android.yml   # GitHub Actions 手动构建 Android debug APK
-├── buildozer.spec                  # Buildozer Android 打包配置
-├── main.py                         # Kivy 应用主代码
-├── simkai.ttf                      # 应用使用的本地字体文件
-└── README_安卓打包说明.txt          # 早期 Android 打包说明
+billing-app-android/
+├── main.py
+├── buildozer.spec
+├── README.md
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── .gitignore
+├── simkai.ttf
+├── README_安卓打包说明.txt
+└── .github/
+    └── workflows/
+        └── android.yml
 ```
 
 ### 本地依赖
@@ -291,7 +297,7 @@ buildozer android debug
 
 ### 实机测试状态
 
-当前 `new-something` 分支版本已经完成 Android 手机实机测试。后续如修改 Android 权限、文件导入导出、Buildozer 配置或 Kivy UI，建议重新进行真机验证。
+当前已验证版本完成过 Android 手机实机测试。后续如修改 Android 权限、文件导入导出、Buildozer 配置或 Kivy UI，建议重新进行真机验证。
 
 ## 当前未包含的能力
 
@@ -314,3 +320,34 @@ buildozer android debug
 - 希望查看月度、年度和分类统计的用户；
 - 需要导出表格或完整备份自己账单数据的用户；
 - 想了解 Python + Kivy Android 应用结构的开发者。
+
+## 分支与开发方式
+
+- `main` 用于保存经过验证的稳定版本；
+- 新功能和修复应通过独立分支开发；
+- 修改完成后通过 Pull Request 合并；
+- 涉及 Kivy UI、Android SAF、导入导出、权限或构建配置时，应进行 Android 实机测试。
+
+## 参与贡献
+
+欢迎以 Issue 或 Pull Request 的方式参与本项目：
+
+- 欢迎提交 Issue；
+- 欢迎反馈 Android 兼容问题；
+- 欢迎通过 Pull Request 修复问题；
+- 一个 PR 尽量只处理一个主题；
+- 提交前说明修改目的和测试结果；
+- 不要提交真实账单、个人路径、账号、密钥、签名文件或其他隐私数据；
+- 详细规则请查看仓库内的贡献指南：[查看贡献指南](CONTRIBUTING.md)。
+
+## 开源许可
+
+当前仓库暂未指定开源许可证。在许可证明确前，请勿直接复制本项目进行商业分发。
+
+## 免责声明
+
+- 本项目是个人记账和编程学习项目；
+- 不构成专业财务、税务或会计建议；
+- 用户应自行备份重要数据；
+- 安装前应确认 APK 来源；
+- debug APK 不等同于正式发布版本。
