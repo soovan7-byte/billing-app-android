@@ -192,7 +192,25 @@ CSV 导出用于表格软件或其他程序读取：
 
 当前仓库根目录只维护一个 `README.md` 作为项目首页，主要提供源码和 GitHub Actions 手动构建 debug APK 的能力。项目未声明已经发布到应用商店，也未在 GitHub Release 中提供正式安装包。
 
-如果通过 GitHub Actions 构建 APK，可在仓库页面进入 **Actions**，选择 Android APK 构建工作流，手动触发构建，然后在构建产物中下载 debug APK。
+通过 GitHub Actions 下载 APK 的参考步骤：
+
+1. 打开仓库的 **Actions** 页面；
+2. 选择 **Build Android APK**；
+3. 点击 **Run workflow**；
+4. 选择需要构建的分支；
+5. 等待构建完成；
+6. 打开成功的 workflow run；
+7. 下载 `android-apk` Artifact；
+8. 解压下载的 ZIP；
+9. 将 APK 安装到 Android 手机。
+
+注意事项：
+
+- 下载 Artifact 可能需要登录 GitHub；
+- 当前工作流生成 debug APK；
+- Android 可能要求允许安装未知来源应用；
+- 当前没有正式 GitHub Release；
+- 当前没有应用商店版本。
 
 ### 日常记账流程
 
@@ -261,6 +279,9 @@ python main.py
 在具备 Buildozer 环境的机器上，可执行：
 
 ```bash
+python -m pip install --upgrade pip
+pip install buildozer
+pip install "Cython<3"
 buildozer android debug
 ```
 
