@@ -646,23 +646,49 @@ class MainScreen(Screen):
         content.add_widget(self._make_page_header(
             "设置", "返回", lambda instance: self.switch_page("accounting")
         ))
+
+        overview_card = self._make_card()
+        overview_box = BoxLayout(
+            orientation="vertical", spacing=dp(8), padding=[CARD_PADDING] * 4, size_hint_y=None
+        )
+        overview_box.bind(minimum_height=overview_box.setter("height"))
+        self.settings_records_count_label = self._make_section_label("账单记录：0 条", font_size=sp(17), height=dp(28))
+        self.settings_categories_count_label = self._make_section_label("分类数量：0 个", font_size=sp(17), height=dp(28))
+        settings_storage_tip = Label(
+            text="数据保存在本机应用目录，卸载应用前请先导出完整备份。",
+            color=COLOR_TEXT_SECONDARY, font_size=sp(14), halign="left", valign="middle",
+            size_hint_y=None, height=dp(44)
+        )
+        settings_storage_tip.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        overview_box.add_widget(self.settings_records_count_label)
+        overview_box.add_widget(self.settings_categories_count_label)
+        overview_box.add_widget(settings_storage_tip)
+        overview_card.add_widget(overview_box)
+        content.add_widget(overview_card)
+
         sections = (
-            ("分类管理", (("管理分类", self.show_categories, False),)),
-            ("数据管理", (
+            ("分类管理", "管理记账时可选择的消费分类", (("管理分类", self.show_categories, False),)),
+            ("数据管理", "导入数据：从 JSON、CSV 或 Excel 恢复账单\n导出数据：生成账单表格或完整备份", (
                 ("导入数据", self.import_data_popup, False),
                 ("导出数据", self.export_data, False),
             )),
-            ("危险操作", (
+            ("危险操作", "清空所有账单记录，不删除分类", (
                 ("清空所有记录", self.clear_all_records, True),
             )),
         )
-        for title, actions in sections:
+        for title, description, actions in sections:
             content.add_widget(self._make_section_label(title))
             card = self._make_card()
             box = BoxLayout(
                 orientation="vertical", spacing=dp(10), padding=[CARD_PADDING] * 4, size_hint_y=None
             )
             box.bind(minimum_height=box.setter("height"))
+            desc_label = Label(
+                text=description, color=COLOR_TEXT_SECONDARY, font_size=sp(14),
+                halign="left", valign="middle", size_hint_y=None, height=dp(44)
+            )
+            desc_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+            box.add_widget(desc_label)
             for text, callback, danger in actions:
                 button = (self._make_danger_button if danger else self._make_secondary_button)(text)
                 button.bind(on_press=callback)
@@ -670,7 +696,14 @@ class MainScreen(Screen):
             card.add_widget(box)
             content.add_widget(card)
         screen.add_widget(self._make_page_scroll(content))
+        self.refresh_settings_page()
         return screen
+
+    def refresh_settings_page(self):
+        if hasattr(self, "settings_records_count_label"):
+            self.settings_records_count_label.text = f"账单记录：{len(self.records)} 条"
+        if hasattr(self, "settings_categories_count_label"):
+            self.settings_categories_count_label.text = f"分类数量：{len(self.categories)} 个"
 
     def switch_page(self, page_name):
         """仅切换视图；所有页面继续使用当前 MainScreen 的共享数据。"""
@@ -678,6 +711,8 @@ class MainScreen(Screen):
             self.refresh_records_page()
         elif page_name == "stats":
             self.refresh_stats_page()
+        elif page_name == "settings":
+            self.refresh_settings_page()
         self.page_manager.current = page_name
 
     def refresh_records_page(self):
@@ -1434,21 +1469,9 @@ class MainScreen(Screen):
         content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
 
         scroll = ScrollView(size_hint=(1, 1))
-        grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-        grid.bind(minimum_height=grid.setter("height"))
-
-        for category in self.categories:
-            row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
-            row.add_widget(Label(text=category, color=COLOR_TEXT, font_size=sp(17), halign="left", valign="middle"))
-
-            delete_btn = self._make_danger_button("删除", font_size=sp(16))
-            delete_btn.size_hint = (0.28, 1)
-            delete_btn.bind(on_press=lambda btn, cat=category: self.delete_category(cat))
-            row.add_widget(delete_btn)
-
-            grid.add_widget(row)
-
-        scroll.add_widget(grid)
+        self.categories_grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        self.categories_grid.bind(minimum_height=self.categories_grid.setter("height"))
+        scroll.add_widget(self.categories_grid)
         content.add_widget(scroll)
 
         self.new_category_input = self._make_text_input(hint_text="输入新分类")
@@ -1463,7 +1486,34 @@ class MainScreen(Screen):
 
         popup = self._make_popup("分类设置", content, (0.9, 0.9))
         close_btn.bind(on_press=popup.dismiss)
+        self._refresh_categories_grid()
         popup.open()
+
+    def _refresh_categories_grid(self):
+        grid = getattr(self, "categories_grid", None)
+        if grid is None:
+            return
+
+        grid.clear_widgets()
+        for category in self.categories:
+            row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+            name_label = Label(
+                text=category, color=COLOR_TEXT, font_size=sp(17), halign="left", valign="middle"
+            )
+            name_label.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+            row.add_widget(name_label)
+
+            delete_btn = self._make_danger_button("删除", font_size=sp(16))
+            delete_btn.size_hint = (0.28, 1)
+            delete_btn.bind(on_press=lambda btn, cat=category: self.confirm_delete_category(cat))
+            row.add_widget(delete_btn)
+
+            grid.add_widget(row)
+
+    def _sync_category_spinner(self, removed_category=None):
+        self.category_spinner.values = self.categories
+        if self.categories and (self.category_spinner.text not in self.categories or self.category_spinner.text == removed_category):
+            self.category_spinner.text = self.categories[0]
 
     def add_category(self, instance):
         new_category = self.new_category_input.text.strip()
@@ -1476,25 +1526,32 @@ class MainScreen(Screen):
             return
 
         self.categories.append(new_category)
-        self.category_spinner.values = self.categories
+        self._sync_category_spinner()
         self.save_data()
         self.new_category_input.text = ""
+        self._refresh_categories_grid()
+        self.refresh_settings_page()
         self.show_popup("成功", f"已添加分类：{new_category}")
+
+    def confirm_delete_category(self, category):
+        message = f"确定要删除分类“{category}”吗？\n历史账单中的分类记录不会被修改。"
+        self.show_confirm_popup("确认删除分类", message, lambda btn: self.delete_category(category))
 
     def delete_category(self, category):
         if category not in self.categories:
+            self._refresh_categories_grid()
             return
 
         if len(self.categories) <= 1:
             self.show_popup("提示", "至少保留一个分类。")
+            self._refresh_categories_grid()
             return
 
         self.categories.remove(category)
-        self.category_spinner.values = self.categories
-        if self.category_spinner.text == category and self.categories:
-            self.category_spinner.text = self.categories[0]
-
+        self._sync_category_spinner(removed_category=category)
         self.save_data()
+        self._refresh_categories_grid()
+        self.refresh_settings_page()
         self.show_popup("成功", f"已删除分类：{category}")
 
     # =========================
@@ -1635,6 +1692,7 @@ class MainScreen(Screen):
             self.records = []
             self.save_data()
             self.update_monthly_expense()
+            self.refresh_settings_page()
             popup = getattr(self, "_delete_records_popup", None)
             if popup is not None:
                 popup.dismiss()
@@ -1646,15 +1704,11 @@ class MainScreen(Screen):
     # 导出
     # =========================
     def export_data(self, instance):
-        if not self.records:
-            self.show_popup("提示", "暂无记录可导出。")
-            return
-
         content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
 
-        btn_xlsx = self._make_secondary_button("导出为 Excel")
-        btn_csv = self._make_secondary_button("导出为 CSV")
-        btn_json = self._make_secondary_button("导出为 JSON")
+        btn_xlsx = self._make_secondary_button("导出 Excel：账单表格")
+        btn_csv = self._make_secondary_button("导出 CSV：账单表格")
+        btn_json = self._make_secondary_button("导出完整备份 JSON：账单和分类")
         btn_close = self._make_text_button("关闭")
 
         popup = self._make_popup("导出数据", content, (0.86, 0.54))
@@ -1720,8 +1774,12 @@ class MainScreen(Screen):
 
     def _create_json_temp_file(self, timestamp):
         temp_path = os.path.join(self.storage_dir, f"export_temp_{timestamp}.json")
+        backup_data = {
+            "records": self.records,
+            "categories": self.categories
+        }
         with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(self.records, f, ensure_ascii=False, indent=2)
+            json.dump(backup_data, f, ensure_ascii=False, indent=2)
         return temp_path
 
     def _create_export_temp_file(self, export_type, timestamp):
@@ -1761,11 +1819,14 @@ class MainScreen(Screen):
                 "request_code": 5103,
                 "extension": "json",
                 "mime_type": "application/json",
-                "success_message": "JSON 导出成功"
+                "success_message": "完整备份 JSON 导出成功"
             }
         }
         config = configs[export_type].copy()
-        config["filename"] = f"记账记录_{timestamp}.{config['extension']}"
+        if export_type == "json":
+            config["filename"] = f"个人记账完整备份_{timestamp}.json"
+        else:
+            config["filename"] = f"记账记录_{timestamp}.{config['extension']}"
         return config
 
     def _ensure_android_export_binding(self):
@@ -1777,7 +1838,7 @@ class MainScreen(Screen):
             self._android_export_bound = True
 
     def _start_android_document_export(self, export_type, popup=None):
-        if not self.records:
+        if export_type != "json" and not self.records:
             self.show_popup("提示", "暂无记录可导出。")
             return
 
@@ -1945,7 +2006,7 @@ class MainScreen(Screen):
             self.sort_records()
             export_dir = self.get_export_dir()
             timestamp = self._get_export_timestamp()
-            filename = f"记账记录_{timestamp}.json"
+            filename = f"个人记账完整备份_{timestamp}.json"
             file_path = os.path.join(export_dir, filename)
             temp_path = self._create_json_temp_file(timestamp)
             try:
@@ -2286,6 +2347,7 @@ class MainScreen(Screen):
 
             self.save_data()
             self.update_monthly_expense()
+            self.refresh_settings_page()
 
             if import_kind == "categories":
                 self.show_popup(
