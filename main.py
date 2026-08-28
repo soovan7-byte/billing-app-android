@@ -44,6 +44,7 @@ from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner, SpinnerOption
+from kivy.uix.switch import Switch
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
@@ -101,11 +102,13 @@ CATEGORY_CHART_COLORS = [
 DEFAULT_CATEGORIES = ["饮食正餐", "娱乐消费", "学习提升", "交通", "水电", "人情世故", "房租", "医疗", "其他"]
 
 
-# 底部三个页面的产品顺序（左→右），用于切换动画方向；settings 不参与排序
+# 底部页面顺序（左→右），用于切换动画方向；settings 不参与排序
+# income 仅在“启用收入功能”开启时出现在底栏，关闭时不可达
 PAGE_ORDER = {
     "accounting": 0,
     "records": 1,
-    "stats": 2,
+    "income": 2,
+    "stats": 3,
 }
 
 
@@ -227,21 +230,45 @@ class RankingRecordRow(ButtonBehavior, BoxLayout):
         rank_label.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(44), val[1])))
         self.add_widget(rank_label)
 
-        text_box = BoxLayout(orientation="vertical", spacing=dp(2), size_hint_y=None)
+        # 中列：竖向文本区（上方元信息单行，下方备注最多两行），宽度由
+        # “卡片总宽 - 左列排名 - 右列金额 - padding/spacing”的剩余空间决定
+        text_box = BoxLayout(orientation="vertical", spacing=dp(2), size_hint_x=1, size_hint_y=None)
         text_box.bind(minimum_height=text_box.setter("height"))
+        meta = Label(
+            text=f"{record.get('分类', '')} · {record.get('日期', '')}",
+            color=COLOR_TEXT_SECONDARY, font_size=sp(13), halign="left", valign="middle",
+            size_hint_y=None, height=dp(22), shorten=True, shorten_from="right", max_lines=1
+        )
+        meta.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
         note = Label(
             text=str(record.get("姓名/备注", "")), color=COLOR_TEXT, font_size=sp(16),
             halign="left", valign="top", shorten=False, max_lines=0,
             size_hint_y=None, height=dp(22)
         )
-        note.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
-        note.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(22), val[1])))
-        meta = Label(
-            text=f"{record.get('分类', '')} · {record.get('日期', '')}",
-            color=COLOR_TEXT_SECONDARY, font_size=sp(13), halign="left", valign="middle",
-            size_hint_y=None, height=dp(22)
-        )
-        meta.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        # 两行截断：先按真实剩余宽度完整渲染；若超过两行高度，
+        # 再切换为“固定两行高 + shorten”截断模式（Kivy 的 shorten 需要固定 text_size 高度），
+        # 保证 1~2 行时行高按实际内容计算、超长时稳定两行加省略号。
+        note._truncated = False
+
+        def update_note_text_size(inst, val):
+            if inst._truncated:
+                inst.text_size = (val[0], dp(48))
+            else:
+                inst.text_size = (val[0], None)
+
+        def update_note_height(inst, val):
+            if inst._truncated:
+                inst.height = max(dp(22), val[1])
+                return
+            if val[1] > dp(48):
+                inst._truncated = True
+                inst.shorten = True
+                inst.max_lines = 2
+                inst.text_size = (inst.width, dp(48))
+            inst.height = max(dp(22), min(val[1], dp(48)))
+
+        note.bind(size=update_note_text_size)
+        note.bind(texture_size=update_note_height)
         text_box.add_widget(meta)
         text_box.add_widget(note)
         self.add_widget(text_box)
@@ -250,12 +277,13 @@ class RankingRecordRow(ButtonBehavior, BoxLayout):
             amount_text = f"{float(record.get('金额', 0)):.2f} 元"
         except (TypeError, ValueError):
             amount_text = f"{record.get('金额', '')} 元"
+        # 右列：金额固定宽度，右对齐，不截断、不被压缩
         amount = Label(
             text=amount_text, color=COLOR_PRIMARY, font_size=sp(17), bold=True,
-            halign="right", valign="middle", size_hint_x=None, width=dp(112),
-            size_hint_y=None, height=dp(44)
+            halign="right", valign="middle", size_hint_x=None, width=dp(120),
+            size_hint_y=None, height=dp(44), shorten=False, max_lines=1
         )
-        amount.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        amount.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
         amount.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(44), val[1])))
         self.add_widget(amount)
 
@@ -370,6 +398,13 @@ class MainScreen(Screen):
 
         self.categories = list(DEFAULT_CATEGORIES)
         self.records = []
+        # 页面按需刷新标记：数据变化时才重建列表/统计，普通切换直接显示缓存
+        self.records_page_dirty = True
+        self.income_page_dirty = True
+        self.stats_page_dirty = True
+        # 收入功能（默认关闭；income_categories 保存“收入分类”名称集合）
+        self.income_enabled = False
+        self.income_categories = set()
         self._android_export_bound = False
         self._pending_android_export = None
         self._pending_android_import = False
@@ -381,6 +416,7 @@ class MainScreen(Screen):
 
         self.records_path = os.path.join(self.storage_dir, "records.json")
         self.categories_path = os.path.join(self.storage_dir, "categories.json")
+        self.settings_path = os.path.join(self.storage_dir, "settings.json")
 
         self.build_ui()
         self.load_data()
@@ -596,6 +632,7 @@ class MainScreen(Screen):
         self._nav_buttons = {}
         self.page_manager.add_widget(self._build_accounting_screen())
         self.page_manager.add_widget(self._build_records_screen())
+        self.page_manager.add_widget(self._build_income_screen())
         self.page_manager.add_widget(self._build_stats_screen())
         self.page_manager.add_widget(self._build_settings_screen())
         root.add_widget(self.page_manager)
@@ -632,7 +669,11 @@ class MainScreen(Screen):
             padding=[PAGE_PADDING, dp(8), PAGE_PADDING, dp(8)]
         )
         self._add_rounded_background(nav, COLOR_CARD_BG, 0, COLOR_BORDER)
-        for page_name, text in (("accounting", "记账"), ("records", "支出"), ("stats", "统计")):
+        nav_pages = [("accounting", "记账"), ("records", "支出")]
+        if self.income_enabled:
+            nav_pages.append(("income", "收入"))
+        nav_pages.append(("stats", "统计"))
+        for page_name, text in nav_pages:
             selected = page_name == selected_page
             button = self._make_button(
                 text,
@@ -645,6 +686,15 @@ class MainScreen(Screen):
             nav.add_widget(button)
             self._nav_buttons[(selected_page, page_name)] = button
         return nav
+
+    def _refresh_all_bottom_navigations(self):
+        """收入开关变化后重建四个主页面底栏（记账/支出/收入/统计）。"""
+        for page_name in ("accounting", "records", "income", "stats"):
+            screen = self.page_manager.get_screen(page_name)
+            page = screen.children[0]
+            if page.children:
+                page.remove_widget(page.children[0])  # 旧底栏（始终是最后添加的第一个子项）
+            page.add_widget(self._make_bottom_navigation(page_name))
 
     def _build_accounting_screen(self):
         screen = Screen(name="accounting")
@@ -751,6 +801,28 @@ class MainScreen(Screen):
         screen.add_widget(page)
         return screen
 
+    def _build_income_screen(self):
+        screen = Screen(name="income")
+        page = BoxLayout(orientation="vertical")
+        content = BoxLayout(
+            orientation="vertical", spacing=CARD_SPACING,
+            padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
+        )
+        content.add_widget(self._make_page_header(
+            "收入", "设置", lambda instance: self.switch_page("settings")
+        ))
+        income_card = self._make_card()
+        self.income_list = GridLayout(
+            cols=1, spacing=dp(8), padding=[CARD_PADDING] * 4, size_hint_y=None
+        )
+        self.income_list.bind(minimum_height=self.income_list.setter("height"))
+        income_card.add_widget(self.income_list)
+        content.add_widget(income_card)
+        page.add_widget(self._make_page_scroll(content))
+        page.add_widget(self._make_bottom_navigation("income"))
+        screen.add_widget(page)
+        return screen
+
     def _build_stats_screen(self):
         screen = Screen(name="stats")
         page = BoxLayout(orientation="vertical")
@@ -822,6 +894,28 @@ class MainScreen(Screen):
         overview_card.add_widget(overview_box)
         content.add_widget(overview_card)
 
+        income_card = self._make_card()
+        income_box = BoxLayout(
+            orientation="vertical", spacing=dp(10), padding=[CARD_PADDING] * 4, size_hint_y=None
+        )
+        income_box.bind(minimum_height=income_box.setter("height"))
+        income_row = BoxLayout(size_hint_y=None, height=CONTROL_HEIGHT, spacing=dp(8))
+        income_row.add_widget(self._make_section_label("启用收入功能", font_size=sp(17), height=CONTROL_HEIGHT))
+        self.income_switch = Switch(
+            active=self.income_enabled, size_hint=(None, None),
+            size=(dp(52), dp(32)), pos_hint={"center_y": 0.5}
+        )
+        self.income_switch.bind(active=self._on_income_switch_changed)
+        income_row.add_widget(self.income_switch)
+        income_box.add_widget(income_row)
+        income_box.add_widget(Label(
+            text="开启后底部导航显示“收入”，记账页可选择收入分类",
+            color=COLOR_TEXT_SECONDARY, font_size=sp(13), halign="left", valign="middle",
+            size_hint_y=None, height=dp(34)
+        ))
+        income_card.add_widget(income_box)
+        content.add_widget(income_card)
+
         sections = (
             ("分类管理", "管理记账时可选择的消费分类", (("管理分类", self.show_categories, False),)),
             ("数据管理", "导入数据：从 JSON、CSV 或 Excel 恢复账单\n导出数据：生成账单表格或完整备份", (
@@ -861,13 +955,38 @@ class MainScreen(Screen):
         if hasattr(self, "settings_categories_count_label"):
             self.settings_categories_count_label.text = f"分类数量：{len(self.categories)} 个"
 
+    def _on_income_switch_changed(self, instance, value):
+        """收入开关：立即生效（底栏/分类/统计联动），数据不丢失。"""
+        if self.income_enabled == value:
+            return
+        self.income_enabled = value
+        self._save_settings()
+        self._refresh_all_bottom_navigations()
+        self._sync_category_spinner()
+        self.income_page_dirty = True
+        self.stats_page_dirty = True
+        if not value and self.page_manager.current == "income":
+            self.switch_page("records")
+
     def switch_page(self, page_name):
-        """切换页面；按页面顺序自动选择左右动画方向，并保留原有刷新逻辑。"""
+        """切换页面；按页面顺序自动选择左右动画方向，并保留原有刷新逻辑。
+
+        性能：记录/收入/统计页采用按需刷新（dirty flag）——数据未变化时
+        直接显示已有页面，避免每次切换都重建列表与统计。
+        """
         current_page = self.page_manager.current
         if page_name == "records":
-            self.refresh_records_page()
+            if self.records_page_dirty:
+                self.refresh_records_page()
+                self.records_page_dirty = False
+        elif page_name == "income":
+            if self.income_page_dirty:
+                self.refresh_income_page()
+                self.income_page_dirty = False
         elif page_name == "stats":
-            self.refresh_stats_page()
+            if self.stats_page_dirty:
+                self.refresh_stats_page()
+                self.stats_page_dirty = False
         elif page_name == "settings":
             self.refresh_settings_page()
 
@@ -894,10 +1013,13 @@ class MainScreen(Screen):
         return "left"
 
     def refresh_records_page(self):
-        """按既有排序规则刷新支出页最近 50 条记录。"""
+        """按既有排序规则刷新支出页最近 50 条记录（只显示记录类型为“支出”）。"""
         self.sort_records()
         self.records_list.clear_widgets()
-        display_records = [record for record in self.records if isinstance(record, dict)][:50]
+        display_records = [
+            record for record in self.records
+            if isinstance(record, dict) and self._get_record_type(record) == "支出"
+        ][:50]
         if not display_records:
             empty = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(164))
             empty.add_widget(Label(
@@ -915,6 +1037,29 @@ class MainScreen(Screen):
             return
         for record in display_records:
             self.records_list.add_widget(RecordRow(record, self.show_record_detail))
+
+    def refresh_income_page(self):
+        """刷新收入页：只显示记录类型为“收入”的记录（最多 50 条）。"""
+        self.sort_records()
+        self.income_list.clear_widgets()
+        display_records = [
+            record for record in self.records
+            if isinstance(record, dict) and self._get_record_type(record) == "收入"
+        ][:50]
+        if not display_records:
+            empty = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(164))
+            empty.add_widget(Label(
+                text="暂无收入记录", color=COLOR_TEXT, size_hint_y=None,
+                height=dp(40), font_size=sp(20), bold=True
+            ))
+            empty.add_widget(Label(
+                text="开启收入功能后，使用收入分类记账即可", color=COLOR_TEXT_SECONDARY,
+                size_hint_y=None, height=dp(36), font_size=sp(15)
+            ))
+            self.income_list.add_widget(empty)
+            return
+        for record in display_records:
+            self.income_list.add_widget(RecordRow(record, self.show_record_detail))
 
     def show_record_detail(self, record):
         """显示完整记录，并从当前记录对象发起安全的单条删除流程。"""
@@ -976,6 +1121,11 @@ class MainScreen(Screen):
                     self.save_data()
                     self.update_monthly_expense()
                     detail_popup.dismiss()
+                    if self._get_record_type(record) == "收入":
+                        self.income_page_dirty = True
+                    else:
+                        self.records_page_dirty = True
+                    self.stats_page_dirty = True
                     self.refresh_records_page()
                     return
 
@@ -1050,6 +1200,50 @@ class MainScreen(Screen):
         record["记录ID"] = rid
         return rid
 
+    def _get_record_type(self, record):
+        """记录自身的类型：收入 / 支出。历史记录缺失时默认为支出。
+
+        类型保存在记录上（而非由分类配置推断），保证分类属性变更不会
+        改变历史记录的收入/支出身份。
+        """
+        record_type = str(record.get("记录类型", "支出")).strip()
+        return record_type if record_type in ("收入", "支出") else "支出"
+
+    def _is_income_category(self, category):
+        """分类是否为“收入分类”（决定新建记录时的默认类型）。"""
+        return category in self.income_categories
+
+    def _load_settings(self):
+        """读取 settings.json（收入开关与收入分类集合）；缺失或损坏时安全回退。"""
+        self.income_enabled = False
+        self.income_categories = set()
+        try:
+            if os.path.exists(self.settings_path):
+                with open(self.settings_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self.income_enabled = bool(data.get("income_enabled", False))
+                    cats = data.get("income_categories", [])
+                    if isinstance(cats, list):
+                        self.income_categories = {
+                            str(c).strip() for c in cats if isinstance(c, str) and c.strip()
+                        }
+        except Exception:
+            self.income_enabled = False
+            self.income_categories = set()
+
+    def _save_settings(self):
+        """持久化收入开关与收入分类集合。"""
+        try:
+            data = {
+                "income_enabled": self.income_enabled,
+                "income_categories": sorted(self.income_categories),
+            }
+            with open(self.settings_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.show_popup("错误", f"保存设置失败：\n{str(e)}")
+
     def load_data(self):
         try:
             if os.path.exists(self.records_path):
@@ -1063,19 +1257,26 @@ class MainScreen(Screen):
                 # 不要把默认分类重新补进用户已经保存的配置。
                 self.categories = loaded_categories
 
-            # 为缺少唯一标识的旧记录补发稳定记录ID（一次性迁移并持久化）
-            needs_id_migration = False
+            self._load_settings()
+
+            # 旧数据迁移（一次性并持久化，幂等）：
+            # 1) 缺少唯一标识的记录补发稳定记录ID；
+            # 2) 缺少“记录类型”的旧记录默认迁移为“支出”（App 原本只有支出）。
+            needs_migration = False
             for record in self.records:
-                if isinstance(record, dict) and not (isinstance(record.get("记录ID"), str) and record.get("记录ID", "").strip()):
+                if not isinstance(record, dict):
+                    continue
+                if not (isinstance(record.get("记录ID"), str) and record.get("记录ID", "").strip()):
                     self._ensure_record_id(record)
-                    needs_id_migration = True
+                    needs_migration = True
+                if self._get_record_type(record) != record.get("记录类型"):
+                    record["记录类型"] = self._get_record_type(record)
+                    needs_migration = True
 
             self.sort_records()
-            self.category_spinner.values = self.categories
-            if self.category_spinner.text not in self.categories and self.categories:
-                self.category_spinner.text = self.categories[0]
+            self._sync_category_spinner()
 
-            if needs_id_migration:
+            if needs_migration:
                 self.save_data()
         except Exception as e:
             self.records = []
@@ -1131,6 +1332,8 @@ class MainScreen(Screen):
 
         for record in self.records:
             if not isinstance(record, dict):
+                continue
+            if self._get_record_type(record) != "支出":
                 continue
             try:
                 record_date = datetime.strptime(str(record.get("日期", "")), "%Y-%m-%d")
@@ -1262,6 +1465,7 @@ class MainScreen(Screen):
         date_str = self.selected_record_date.strftime("%Y-%m-%d")
 
         record = {
+            "记录类型": "收入" if self._is_income_category(category) else "支出",
             "姓名/备注": note,
             "分类": category,
             "金额": amount,
@@ -1273,6 +1477,11 @@ class MainScreen(Screen):
         self.records.append(record)
         self.save_data()
         self.update_monthly_expense()
+        if self._get_record_type(record) == "收入":
+            self.income_page_dirty = True
+        else:
+            self.records_page_dirty = True
+        self.stats_page_dirty = True
 
         self.name_input.text = ""
         self.amount_input.text = ""
@@ -1314,6 +1523,31 @@ class MainScreen(Screen):
             available = self.get_available_months()
         return [current] + [period for period in available if period != current]
 
+    def _build_income_summary_card(self, period, income_total, expense_total):
+        """收入功能开启时统计页顶部的“收入 / 支出 / 收支差”卡片。"""
+        card = self._make_card()
+        summary = BoxLayout(
+            orientation="vertical", spacing=dp(4), padding=[CARD_PADDING] * 4,
+            size_hint_y=None, height=dp(120)
+        )
+        period_suffix = "年度统计" if self.stats_mode == "year" else "月度统计"
+        summary.add_widget(self._make_stats_label(
+            f"{period}  {period_suffix}（收入）", sp(14), dp(24), COLOR_TEXT_SECONDARY, halign="left"
+        ))
+        summary.add_widget(self._make_stats_label(
+            f"收入：{income_total:.2f} 元", sp(19), dp(32), COLOR_SUCCESS, halign="left"
+        ))
+        summary.add_widget(self._make_stats_label(
+            f"支出：{expense_total:.2f} 元", sp(17), dp(30), COLOR_PRIMARY, halign="left"
+        ))
+        diff = income_total - expense_total
+        diff_color = COLOR_SUCCESS if diff >= 0 else COLOR_DANGER
+        summary.add_widget(self._make_stats_label(
+            f"收支差：{diff:.2f} 元", sp(17), dp(30), diff_color, halign="left"
+        ))
+        card.add_widget(summary)
+        return card
+
     def _build_stats_summary_card(self, period, total, record_count):
         card = self._make_card()
         summary = BoxLayout(
@@ -1354,9 +1588,28 @@ class MainScreen(Screen):
             records = self.get_records_for_month(selected_period)
             empty_text = "暂无本月消费记录"
 
-        category_stats = self.get_category_stats(records)
+        # 收入/支出严格分离：统计、分类、排名只处理支出记录；收入单独汇总
+        expense_records = [
+            record for record in records
+            if isinstance(record, dict) and self._get_record_type(record) == "支出"
+        ]
+        income_records = [
+            record for record in records
+            if isinstance(record, dict) and self._get_record_type(record) == "收入"
+        ]
+        income_total = sum(
+            amount for record in income_records
+            if (amount := self._get_record_amount(record)) is not None
+        )
+
+        category_stats = self.get_category_stats(expense_records)
         total = sum(amount for category, amount in category_stats)
-        valid_record_count = sum(1 for record in records if self._get_record_amount(record) is not None)
+        valid_record_count = sum(1 for record in expense_records if self._get_record_amount(record) is not None)
+
+        if self.income_enabled:
+            self.stats_results.add_widget(
+                self._build_income_summary_card(selected_period, income_total, total)
+            )
         self.stats_results.add_widget(
             self._build_stats_summary_card(selected_period, total, valid_record_count)
         )
@@ -1366,7 +1619,7 @@ class MainScreen(Screen):
             orientation="vertical", spacing=dp(12), padding=[CARD_PADDING] * 4, size_hint_y=None
         )
         details.bind(minimum_height=details.setter("height"))
-        details.add_widget(self._build_category_stats_section(category_stats, total, empty_text, records, selected_period))
+        details.add_widget(self._build_category_stats_section(category_stats, total, empty_text, expense_records, selected_period))
         if self.stats_mode == "year":
             monthly_totals = self.get_monthly_totals_for_year(selected_period)
             details.add_widget(self._build_year_monthly_totals_section(monthly_totals))
@@ -1795,7 +2048,10 @@ class MainScreen(Screen):
         is_current_month = period_type == "current_month"
 
         if is_year:
-            records = self.get_records_for_year(period_value)
+            records = [
+                r for r in self.get_records_for_year(period_value)
+                if isinstance(r, dict) and self._get_record_type(r) == "支出"
+            ]
             category_stats = self.get_category_stats(records)
             total = sum(amount for category, amount in category_stats)
             monthly_totals = self.get_monthly_totals_for_year(period_value)
@@ -1804,7 +2060,10 @@ class MainScreen(Screen):
             empty_text = f"{period_value} 年没有有效消费记录"
             popup_title = "年度统计"
         else:
-            records = self.get_records_for_month(period_value)
+            records = [
+                r for r in self.get_records_for_month(period_value)
+                if isinstance(r, dict) and self._get_record_type(r) == "支出"
+            ]
             category_stats = self.get_category_stats(records)
             total = sum(amount for category, amount in category_stats)
             monthly_totals = None
@@ -1861,6 +2120,15 @@ class MainScreen(Screen):
         self.new_category_input = self._make_text_input(hint_text="输入新分类")
         content.add_widget(self.new_category_input)
 
+        type_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+        type_row.add_widget(self._make_section_label("是否为收入", font_size=sp(16), height=dp(48)))
+        self.new_category_income_switch = Switch(
+            active=False, size_hint=(None, None), size=(dp(52), dp(32)),
+            pos_hint={"center_y": 0.5}
+        )
+        type_row.add_widget(self.new_category_income_switch)
+        content.add_widget(type_row)
+
         add_btn = self._make_primary_button("添加分类")
         add_btn.bind(on_press=self.add_category)
         content.add_widget(add_btn)
@@ -1880,6 +2148,7 @@ class MainScreen(Screen):
             self._categories_popup = None
             self.categories_grid = None
             self.new_category_input = None
+            self.new_category_income_switch = None
 
     def _refresh_categories_grid(self):
         grid = getattr(self, "categories_grid", None)
@@ -1895,30 +2164,49 @@ class MainScreen(Screen):
             name_label.bind(size=lambda inst, val: setattr(inst, "text_size", val))
             row.add_widget(name_label)
 
-            move_up_btn = self._make_secondary_button("上移", font_size=sp(14))
+            move_up_btn = self._make_secondary_button("上移", font_size=sp(13))
             move_up_btn.size_hint_x = None
-            move_up_btn.width = dp(58)
+            move_up_btn.width = dp(54)
             move_up_btn.bind(on_press=lambda btn, cat=category: self.move_category(cat, -1))
             row.add_widget(move_up_btn)
 
-            move_down_btn = self._make_secondary_button("下移", font_size=sp(14))
+            move_down_btn = self._make_secondary_button("下移", font_size=sp(13))
             move_down_btn.size_hint_x = None
-            move_down_btn.width = dp(58)
+            move_down_btn.width = dp(54)
             move_down_btn.bind(on_press=lambda btn, cat=category: self.move_category(cat, 1))
             row.add_widget(move_down_btn)
 
-            delete_btn = self._make_danger_button("删除", font_size=sp(14))
+            # 分类类型切换：只影响以后新记记录的类型，不改历史记录
+            if self._is_income_category(category):
+                type_btn = self._make_button(
+                    "收入", COLOR_SUCCESS_LIGHT, COLOR_SUCCESS, height=dp(48), font_size=sp(13)
+                )
+            else:
+                type_btn = self._make_secondary_button("支出", height=dp(48), font_size=sp(13))
+            type_btn.size_hint_x = None
+            type_btn.width = dp(54)
+            type_btn.bind(on_press=lambda btn, cat=category: self.toggle_category_type(cat))
+            row.add_widget(type_btn)
+
+            delete_btn = self._make_danger_button("删除", font_size=sp(13))
             delete_btn.size_hint_x = None
-            delete_btn.width = dp(58)
+            delete_btn.width = dp(54)
             delete_btn.bind(on_press=lambda btn, cat=category: self.confirm_delete_category(cat))
             row.add_widget(delete_btn)
 
             grid.add_widget(row)
 
     def _sync_category_spinner(self, removed_category=None):
-        self.category_spinner.values = self.categories
-        if self.categories and (self.category_spinner.text not in self.categories or self.category_spinner.text == removed_category):
-            self.category_spinner.text = self.categories[0]
+        # 收入功能关闭时隐藏收入分类，避免误记收入；开启后恢复全部可见
+        if self.income_enabled:
+            visible_categories = list(self.categories)
+        else:
+            visible_categories = [
+                c for c in self.categories if c not in self.income_categories
+            ]
+        self.category_spinner.values = visible_categories
+        if visible_categories and (self.category_spinner.text not in visible_categories or self.category_spinner.text == removed_category):
+            self.category_spinner.text = visible_categories[0]
 
     def add_category(self, instance):
         new_category = self.new_category_input.text.strip()
@@ -1931,9 +2219,14 @@ class MainScreen(Screen):
             return
 
         self.categories.append(new_category)
+        if getattr(self, "new_category_income_switch", None) is not None and self.new_category_income_switch.active:
+            self.income_categories.add(new_category)
+            self._save_settings()
         self._sync_category_spinner()
         self.save_data()
         self.new_category_input.text = ""
+        if getattr(self, "new_category_income_switch", None) is not None:
+            self.new_category_income_switch.active = False
         self._refresh_categories_grid()
         self.refresh_settings_page()
         self.show_popup("成功", f"已添加分类：{new_category}")
@@ -1953,6 +2246,9 @@ class MainScreen(Screen):
             return
 
         self.categories.remove(category)
+        if category in self.income_categories:
+            self.income_categories.discard(category)
+            self._save_settings()
         self._sync_category_spinner(removed_category=category)
         self.save_data()
         self._refresh_categories_grid()
@@ -1974,6 +2270,16 @@ class MainScreen(Screen):
         self.categories[index], self.categories[target] = self.categories[target], self.categories[index]
         self._sync_category_spinner()
         self.save_data()
+        self._refresh_categories_grid()
+
+    def toggle_category_type(self, category):
+        """切换分类为收入/支出分类；只影响以后新记记录的类型，不修改历史记录。"""
+        if self._is_income_category(category):
+            self.income_categories.discard(category)
+        else:
+            self.income_categories.add(category)
+        self._save_settings()
+        self._sync_category_spinner()
         self._refresh_categories_grid()
 
     # =========================
@@ -2123,6 +2429,9 @@ class MainScreen(Screen):
             self.save_data()
             self.update_monthly_expense()
             self.refresh_settings_page()
+            self.records_page_dirty = True
+            self.income_page_dirty = True
+            self.stats_page_dirty = True
             popup = getattr(self, "_delete_records_popup", None)
             if popup is not None:
                 popup.dismiss()
@@ -2159,7 +2468,7 @@ class MainScreen(Screen):
         return platform == "android"
 
     def _get_export_fieldnames(self):
-        return ["记录ID", "姓名/备注", "分类", "金额", "日期", "记录时间"]
+        return ["记录ID", "记录类型", "姓名/备注", "分类", "金额", "日期", "记录时间"]
 
     def _get_export_timestamp(self):
         return datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2179,6 +2488,7 @@ class MainScreen(Screen):
                 continue
             ws.append([
                 record.get("记录ID", ""),
+                record.get("记录类型", "支出"),
                 record.get("姓名/备注", ""),
                 record.get("分类", ""),
                 record.get("金额", ""),
@@ -2200,6 +2510,7 @@ class MainScreen(Screen):
                     continue
                 writer.writerow({
                     "记录ID": record.get("记录ID", ""),
+                    "记录类型": record.get("记录类型", "支出"),
                     "姓名/备注": record.get("姓名/备注", ""),
                     "分类": record.get("分类", ""),
                     "金额": record.get("金额", ""),
@@ -2742,8 +3053,13 @@ class MainScreen(Screen):
                     duplicate_count += 1
                     continue
 
+                record_type = str(record.get("记录类型", "支出")).strip()
+                if record_type not in ("收入", "支出"):
+                    record_type = "支出"
+
                 clean_record = {
                     "记录ID": rid if rid else uuid.uuid4().hex,
+                    "记录类型": record_type,
                     "姓名/备注": clean_note,
                     "分类": clean_category,
                     "金额": amount,
@@ -2795,6 +3111,9 @@ class MainScreen(Screen):
             self.save_data()
             self.update_monthly_expense()
             self.refresh_settings_page()
+            self.records_page_dirty = True
+            self.income_page_dirty = True
+            self.stats_page_dirty = True
 
             if import_kind == "categories":
                 self.show_popup(
