@@ -3,6 +3,7 @@ import os
 import json
 import csv
 import math
+import uuid
 from datetime import datetime
 
 from kivy.config import Config
@@ -187,11 +188,15 @@ class RecordRow(ButtonBehavior, BoxLayout):
 
 
 class RankingRecordRow(ButtonBehavior, BoxLayout):
-    """消费排名列表中可点击的单条记录行：排名 + 备注 + 分类/日期 + 金额。"""
+    """消费排名列表中可点击的单条记录行：排名 + 分类/日期 + 完整备注 + 金额。
+
+    行高根据内容自适应（备注支持多行完整显示），避免长备注被截断后
+    同分类的多笔消费无法区分；点击行打开该记录自身的详情。
+    """
     def __init__(self, rank, record, on_open, **kwargs):
         super().__init__(
-            orientation="horizontal", spacing=dp(12), padding=[dp(14), dp(8)],
-            size_hint_y=None, height=dp(64), **kwargs
+            orientation="horizontal", spacing=dp(12), padding=[dp(14), dp(10)],
+            size_hint_y=None, **kwargs
         )
         self.record = record
         with self.canvas.before:
@@ -215,17 +220,22 @@ class RankingRecordRow(ButtonBehavior, BoxLayout):
 
         rank_label = Label(
             text=str(rank), color=COLOR_PRIMARY, font_size=sp(20), bold=True,
-            halign="center", valign="middle", size_hint_x=None, width=dp(40)
+            halign="center", valign="middle", size_hint_x=None, width=dp(40),
+            size_hint_y=None, height=dp(44)
         )
         rank_label.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        rank_label.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(44), val[1])))
         self.add_widget(rank_label)
 
-        text_box = BoxLayout(orientation="vertical", spacing=dp(2))
+        text_box = BoxLayout(orientation="vertical", spacing=dp(2), size_hint_y=None)
+        text_box.bind(minimum_height=text_box.setter("height"))
         note = Label(
             text=str(record.get("姓名/备注", "")), color=COLOR_TEXT, font_size=sp(16),
-            halign="left", valign="middle", shorten=True, shorten_from="right", max_lines=1
+            halign="left", valign="top", shorten=False, max_lines=0,
+            size_hint_y=None, height=dp(22)
         )
-        note.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
+        note.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        note.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(22), val[1])))
         meta = Label(
             text=f"{record.get('分类', '')} · {record.get('日期', '')}",
             color=COLOR_TEXT_SECONDARY, font_size=sp(13), halign="left", valign="middle",
@@ -242,10 +252,18 @@ class RankingRecordRow(ButtonBehavior, BoxLayout):
             amount_text = f"{record.get('金额', '')} 元"
         amount = Label(
             text=amount_text, color=COLOR_PRIMARY, font_size=sp(17), bold=True,
-            halign="right", valign="middle", size_hint_x=None, width=dp(112)
+            halign="right", valign="middle", size_hint_x=None, width=dp(112),
+            size_hint_y=None, height=dp(44)
         )
         amount.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        amount.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(44), val[1])))
         self.add_widget(amount)
+
+        # 行高随内容自适应（备注多行时变高），最小保持可点击高度
+        def update_height(instance, value):
+            instance.height = max(instance.minimum_height, dp(56))
+
+        self.bind(minimum_height=update_height)
 
 
 class CategoryPieChart(Widget):
@@ -1021,6 +1039,17 @@ class MainScreen(Screen):
     def sort_records(self):
         self.records.sort(key=self._get_record_sort_datetime, reverse=True)
 
+    def _ensure_record_id(self, record):
+        """确保记录有稳定的唯一标识（“记录ID”）；缺失时生成 UUID 并写入记录。"""
+        if not isinstance(record, dict):
+            return None
+        rid = record.get("记录ID")
+        if isinstance(rid, str) and rid.strip():
+            return rid.strip()
+        rid = uuid.uuid4().hex
+        record["记录ID"] = rid
+        return rid
+
     def load_data(self):
         try:
             if os.path.exists(self.records_path):
@@ -1034,10 +1063,20 @@ class MainScreen(Screen):
                 # 不要把默认分类重新补进用户已经保存的配置。
                 self.categories = loaded_categories
 
+            # 为缺少唯一标识的旧记录补发稳定记录ID（一次性迁移并持久化）
+            needs_id_migration = False
+            for record in self.records:
+                if isinstance(record, dict) and not (isinstance(record.get("记录ID"), str) and record.get("记录ID", "").strip()):
+                    self._ensure_record_id(record)
+                    needs_id_migration = True
+
             self.sort_records()
             self.category_spinner.values = self.categories
             if self.category_spinner.text not in self.categories and self.categories:
                 self.category_spinner.text = self.categories[0]
+
+            if needs_id_migration:
+                self.save_data()
         except Exception as e:
             self.records = []
             self.show_popup("提示", f"读取本地数据失败：\n{str(e)}")
@@ -1229,6 +1268,7 @@ class MainScreen(Screen):
             "日期": date_str,
             "记录时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+        self._ensure_record_id(record)
 
         self.records.append(record)
         self.save_data()
@@ -2119,7 +2159,7 @@ class MainScreen(Screen):
         return platform == "android"
 
     def _get_export_fieldnames(self):
-        return ["姓名/备注", "分类", "金额", "日期", "记录时间"]
+        return ["记录ID", "姓名/备注", "分类", "金额", "日期", "记录时间"]
 
     def _get_export_timestamp(self):
         return datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2138,6 +2178,7 @@ class MainScreen(Screen):
             if not isinstance(record, dict):
                 continue
             ws.append([
+                record.get("记录ID", ""),
                 record.get("姓名/备注", ""),
                 record.get("分类", ""),
                 record.get("金额", ""),
@@ -2158,6 +2199,7 @@ class MainScreen(Screen):
                 if not isinstance(record, dict):
                     continue
                 writer.writerow({
+                    "记录ID": record.get("记录ID", ""),
                     "姓名/备注": record.get("姓名/备注", ""),
                     "分类": record.get("分类", ""),
                     "金额": record.get("金额", ""),
@@ -2646,21 +2688,20 @@ class MainScreen(Screen):
                 self.show_popup("导入失败", "文件内容格式不正确。")
                 return
 
-            existing_keys = set()
+            # 幂等判定只使用来源唯一标识（记录ID）：
+            # 相同 ID -> 同一来源记录，跳过；不同 ID（或没有 ID）-> 视为不同记录，全部导入。
+            # 不再按“备注+分类+金额+日期”内容去重，避免把真实不同的消费误判为重复。
+            existing_ids = set()
             for record in self.records:
-                try:
-                    note = str(record.get("姓名/备注", "")).strip()
-                    category = str(record.get("分类", "")).strip()
-                    amount = round(float(record.get("金额", 0)), 2)
-                    date_str = str(record.get("日期", "")).strip()
-                    key = (note, category, amount, date_str)
-                    existing_keys.add(key)
-                except Exception:
-                    continue
+                if isinstance(record, dict):
+                    rid = record.get("记录ID")
+                    if isinstance(rid, str) and rid.strip():
+                        existing_ids.add(rid.strip())
 
             valid_records = []
             new_categories = set()
             duplicate_count = 0
+            seen_ids_in_file = set()
 
             for record in imported_records:
                 if not isinstance(record, dict):
@@ -2692,13 +2733,17 @@ class MainScreen(Screen):
 
                 clean_note = str(note).strip()
                 clean_category = str(category).strip()
-                key = (clean_note, clean_category, amount, date_str)
+                rid = record.get("记录ID", record.get("record_id", ""))
+                if isinstance(rid, str):
+                    rid = rid.strip()
 
-                if key in existing_keys:
+                # 只有来源带有可靠唯一标识时才做幂等跳过；无 ID 的记录一律导入
+                if rid and (rid in existing_ids or rid in seen_ids_in_file):
                     duplicate_count += 1
                     continue
 
                 clean_record = {
+                    "记录ID": rid if rid else uuid.uuid4().hex,
                     "姓名/备注": clean_note,
                     "分类": clean_category,
                     "金额": amount,
@@ -2708,10 +2753,12 @@ class MainScreen(Screen):
 
                 valid_records.append(clean_record)
                 new_categories.add(clean_category)
-                existing_keys.add(key)
+                if rid:
+                    existing_ids.add(rid)
+                    seen_ids_in_file.add(rid)
 
             if import_kind == "records" and not valid_records and duplicate_count > 0:
-                self.show_popup("导入完成", f"没有新增记录。\n检测到 {duplicate_count} 条重复记录，已自动跳过。")
+                self.show_popup("导入完成", f"没有新增记录。\n检测到 {duplicate_count} 条已导入过的记录（按记录ID判定），已自动跳过。")
                 return
 
             if import_kind == "records" and not valid_records:
@@ -2758,14 +2805,14 @@ class MainScreen(Screen):
                 self.show_popup(
                     "导入完成",
                     f"成功导入 {len(valid_records)} 条记录。\n"
-                    f"自动跳过 {duplicate_count} 条重复记录。\n"
+                    f"自动跳过 {duplicate_count} 条已导入过的记录。\n"
                     f"新增分类 {added_category_count} 个。\n"
                     f"重复分类 {duplicate_category_count} 个。"
                 )
             else:
                 self.show_popup(
                     "导入成功",
-                    f"成功导入 {len(valid_records)} 条记录。\n自动跳过 {duplicate_count} 条重复记录。"
+                    f"成功导入 {len(valid_records)} 条记录。\n自动跳过 {duplicate_count} 条已导入过的记录。"
                 )
 
         except Exception as e:
