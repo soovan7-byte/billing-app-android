@@ -2,6 +2,7 @@
 import os
 import json
 import csv
+import math
 from datetime import datetime
 
 from kivy.config import Config
@@ -95,6 +96,18 @@ CATEGORY_CHART_COLORS = [
 ]
 
 
+# 默认分类：仅在 categories.json 缺失、损坏或没有任何有效分类时作为回退
+DEFAULT_CATEGORIES = ["饮食正餐", "娱乐消费", "学习提升", "交通", "水电", "人情世故", "房租", "医疗", "其他"]
+
+
+# 底部三个页面的产品顺序（左→右），用于切换动画方向；settings 不参与排序
+PAGE_ORDER = {
+    "accounting": 0,
+    "records": 1,
+    "stats": 2,
+}
+
+
 class ThemedSpinnerOption(SpinnerOption):
     """保证下拉选项在 Android 上保持清晰且具备足够触控高度。"""
     def __init__(self, **kwargs):
@@ -119,7 +132,7 @@ class ThemedSpinnerOption(SpinnerOption):
 
 
 class RecordRow(ButtonBehavior, BoxLayout):
-    """明细页中可直接点击的记录卡片。"""
+    """支出页中可直接点击的记录卡片。"""
     def __init__(self, record, on_open, **kwargs):
         super().__init__(
             orientation="horizontal", spacing=dp(12), padding=[dp(14), dp(10)],
@@ -173,12 +186,81 @@ class RecordRow(ButtonBehavior, BoxLayout):
         self.add_widget(amount)
 
 
+class RankingRecordRow(ButtonBehavior, BoxLayout):
+    """消费排名列表中可点击的单条记录行：排名 + 备注 + 分类/日期 + 金额。"""
+    def __init__(self, rank, record, on_open, **kwargs):
+        super().__init__(
+            orientation="horizontal", spacing=dp(12), padding=[dp(14), dp(8)],
+            size_hint_y=None, height=dp(64), **kwargs
+        )
+        self.record = record
+        with self.canvas.before:
+            Color(*COLOR_BORDER)
+            self.row_border = RoundedRectangle(pos=self.pos, size=self.size, radius=[BUTTON_RADIUS] * 4)
+            Color(*COLOR_CARD_BG)
+            self.row_bg = RoundedRectangle(
+                pos=(self.x + dp(1), self.y + dp(1)),
+                size=(max(0, self.width - dp(2)), max(0, self.height - dp(2))),
+                radius=[BUTTON_RADIUS - dp(1)] * 4
+            )
+
+        def update_canvas(instance, value):
+            instance.row_border.pos = instance.pos
+            instance.row_border.size = instance.size
+            instance.row_bg.pos = (instance.x + dp(1), instance.y + dp(1))
+            instance.row_bg.size = (max(0, instance.width - dp(2)), max(0, instance.height - dp(2)))
+
+        self.bind(pos=update_canvas, size=update_canvas)
+        self.bind(on_release=lambda instance: on_open(self.record))
+
+        rank_label = Label(
+            text=str(rank), color=COLOR_PRIMARY, font_size=sp(20), bold=True,
+            halign="center", valign="middle", size_hint_x=None, width=dp(40)
+        )
+        rank_label.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        self.add_widget(rank_label)
+
+        text_box = BoxLayout(orientation="vertical", spacing=dp(2))
+        note = Label(
+            text=str(record.get("姓名/备注", "")), color=COLOR_TEXT, font_size=sp(16),
+            halign="left", valign="middle", shorten=True, shorten_from="right", max_lines=1
+        )
+        note.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
+        meta = Label(
+            text=f"{record.get('分类', '')} · {record.get('日期', '')}",
+            color=COLOR_TEXT_SECONDARY, font_size=sp(13), halign="left", valign="middle",
+            size_hint_y=None, height=dp(22)
+        )
+        meta.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        text_box.add_widget(meta)
+        text_box.add_widget(note)
+        self.add_widget(text_box)
+
+        try:
+            amount_text = f"{float(record.get('金额', 0)):.2f} 元"
+        except (TypeError, ValueError):
+            amount_text = f"{record.get('金额', '')} 元"
+        amount = Label(
+            text=amount_text, color=COLOR_PRIMARY, font_size=sp(17), bold=True,
+            halign="right", valign="middle", size_hint_x=None, width=dp(112)
+        )
+        amount.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        self.add_widget(amount)
+
+
 class CategoryPieChart(Widget):
-    """使用 Kivy Canvas 绘制按分类消费占比的正圆扇形图。"""
-    def __init__(self, category_stats=None, colors=None, **kwargs):
+    """使用 Kivy Canvas 绘制按分类消费占比的正圆扇形图，支持点击扇区回调分类。
+
+    只负责绘图与命中判断，点击后的业务 Popup 由 MainScreen 处理。
+    """
+    def __init__(self, category_stats=None, colors=None, on_category_press=None, **kwargs):
         super().__init__(**kwargs)
         self.category_stats = category_stats or []
         self.colors = colors or CATEGORY_CHART_COLORS
+        self.on_category_press = on_category_press
+        self.sectors = []
+        self.chart_center = (0.0, 0.0)
+        self.chart_radius = 0.0
         self.bind(pos=self._redraw, size=self._redraw)
         self._redraw()
 
@@ -188,6 +270,10 @@ class CategoryPieChart(Widget):
 
     def _redraw(self, *args):
         self.canvas.clear()
+        # 每次重绘重建扇区命中信息，避免尺寸改变后继续使用旧几何数据
+        self.sectors = []
+        self.chart_center = (0.0, 0.0)
+        self.chart_radius = 0.0
         valid_stats = [(category, amount) for category, amount in self.category_stats if amount > 0]
         total = sum(amount for category, amount in valid_stats)
         if total <= 0:
@@ -201,6 +287,9 @@ class CategoryPieChart(Widget):
         diameter = max(0, diameter - padding * 2)
         x = self.x + (self.width - diameter) / 2
         y = self.y + (self.height - diameter) / 2
+        radius = diameter / 2.0
+        self.chart_center = (x + radius, y + radius)
+        self.chart_radius = radius
 
         start_angle = 0
         with self.canvas:
@@ -208,7 +297,52 @@ class CategoryPieChart(Widget):
                 end_angle = 360 if index == len(valid_stats) - 1 else start_angle + amount / total * 360
                 Color(*self.colors[index % len(self.colors)])
                 Ellipse(pos=(x, y), size=(diameter, diameter), angle_start=start_angle, angle_end=end_angle)
+                self.sectors.append({
+                    "category": category,
+                    "amount": amount,
+                    "start_angle": start_angle,
+                    "end_angle": end_angle,
+                })
                 start_angle = end_angle
+
+    def _get_touch_angle(self, touch_x, touch_y):
+        """触点相对实际圆心/半径的命中角度；圆外返回 None。
+
+        角度采用 Kivy Ellipse 的实际语义（0° 在 12 点钟方向、顺时针，
+        绘制时 x = r*sin(θ)、y = r*cos(θ)），因此命中角 θ = atan2(dx, dy)。
+        """
+        if not self.sectors or self.chart_radius <= 0:
+            return None
+        center_x, center_y = self.chart_center
+        dx = touch_x - center_x
+        dy = touch_y - center_y
+        if dx * dx + dy * dy > self.chart_radius * self.chart_radius:
+            return None
+        angle = math.degrees(math.atan2(dx, dy))
+        if angle < 0:
+            angle += 360
+        return angle
+
+    def _get_sector_at_angle(self, angle):
+        """按半开区间 [start, end) 命中扇区；最后一个扇区包含 360°，一个触点最多命中一个分类。"""
+        if angle is None:
+            return None
+        last_index = len(self.sectors) - 1
+        for index, sector in enumerate(self.sectors):
+            if index == last_index:
+                if sector["start_angle"] <= angle <= sector["end_angle"]:
+                    return sector
+            elif sector["start_angle"] <= angle < sector["end_angle"]:
+                return sector
+        return None
+
+    def on_touch_down(self, touch):
+        """命中扇区并存在回调时才消费触摸；否则交还父级，避免影响 ScrollView 滚动。"""
+        sector = self._get_sector_at_angle(self._get_touch_angle(touch.x, touch.y))
+        if sector is not None and self.on_category_press is not None:
+            self.on_category_press(sector["category"])
+            return True
+        return super().on_touch_down(touch)
 
 
 class MainScreen(Screen):
@@ -216,7 +350,7 @@ class MainScreen(Screen):
         super().__init__(**kwargs)
         self.name = "main"
 
-        self.categories = ["饮食正餐", "娱乐消费", "学习提升", "交通", "水电", "人情世故", "房租", "医疗", "其他"]
+        self.categories = list(DEFAULT_CATEGORIES)
         self.records = []
         self._android_export_bound = False
         self._pending_android_export = None
@@ -480,7 +614,7 @@ class MainScreen(Screen):
             padding=[PAGE_PADDING, dp(8), PAGE_PADDING, dp(8)]
         )
         self._add_rounded_background(nav, COLOR_CARD_BG, 0, COLOR_BORDER)
-        for page_name, text in (("accounting", "记账"), ("records", "明细"), ("stats", "统计")):
+        for page_name, text in (("accounting", "记账"), ("records", "支出"), ("stats", "统计")):
             selected = page_name == selected_page
             button = self._make_button(
                 text,
@@ -584,7 +718,9 @@ class MainScreen(Screen):
             orientation="vertical", spacing=CARD_SPACING,
             padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
         )
-        content.add_widget(self._make_page_header("明细"))
+        content.add_widget(self._make_page_header(
+            "支出", "设置", lambda instance: self.switch_page("settings")
+        ))
         records_card = self._make_card()
         self.records_list = GridLayout(
             cols=1, spacing=dp(8), padding=[CARD_PADDING] * 4, size_hint_y=None
@@ -604,7 +740,9 @@ class MainScreen(Screen):
             orientation="vertical", spacing=CARD_SPACING,
             padding=[PAGE_PADDING, PAGE_PADDING, PAGE_PADDING, dp(24)]
         )
-        content.add_widget(self._make_page_header("统计"))
+        content.add_widget(self._make_page_header(
+            "统计", "设置", lambda instance: self.switch_page("settings")
+        ))
 
         controls_card = self._make_card()
         controls = BoxLayout(
@@ -706,17 +844,39 @@ class MainScreen(Screen):
             self.settings_categories_count_label.text = f"分类数量：{len(self.categories)} 个"
 
     def switch_page(self, page_name):
-        """仅切换视图；所有页面继续使用当前 MainScreen 的共享数据。"""
+        """切换页面；按页面顺序自动选择左右动画方向，并保留原有刷新逻辑。"""
+        current_page = self.page_manager.current
         if page_name == "records":
             self.refresh_records_page()
         elif page_name == "stats":
             self.refresh_stats_page()
         elif page_name == "settings":
             self.refresh_settings_page()
+
+        if page_name == current_page:
+            return
+
+        direction = self._get_page_transition_direction(current_page, page_name)
+        if direction is not None:
+            self.page_manager.transition.direction = direction
         self.page_manager.current = page_name
 
+    def _get_page_transition_direction(self, current_page, target_page):
+        """根据页面顺序判定切换动画方向，返回 None 表示无需动画。"""
+        if current_page == target_page:
+            return None
+        current_index = PAGE_ORDER.get(current_page)
+        target_index = PAGE_ORDER.get(target_page)
+        if current_index is not None and target_index is not None:
+            return "left" if target_index > current_index else "right"
+        if current_page == "accounting" and target_page == "settings":
+            return "left"
+        if current_page == "settings" and target_page == "accounting":
+            return "right"
+        return "left"
+
     def refresh_records_page(self):
-        """按既有排序规则刷新明细页最近 50 条记录。"""
+        """按既有排序规则刷新支出页最近 50 条记录。"""
         self.sort_records()
         self.records_list.clear_widgets()
         display_records = [record for record in self.records if isinstance(record, dict)][:50]
@@ -837,28 +997,29 @@ class MainScreen(Screen):
     def _has_exportable_records(self):
         return any(isinstance(record, dict) for record in self.records)
 
-    def sort_records(self):
-        def sort_key(record):
-            if not isinstance(record, dict):
-                return datetime.min
-            record_time = str(record.get("记录时间", "")).strip()
-            date_str = str(record.get("日期", "")).strip()
-
-            try:
-                if record_time:
-                    return datetime.strptime(record_time, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                pass
-
-            try:
-                if date_str:
-                    return datetime.strptime(date_str, "%Y-%m-%d")
-            except Exception:
-                pass
-
+    def _get_record_sort_datetime(self, record):
+        """统一记录时间排序键：优先“记录时间”，其次“日期”，解析失败回退 datetime.min。"""
+        if not isinstance(record, dict):
             return datetime.min
+        record_time = str(record.get("记录时间", "")).strip()
+        date_str = str(record.get("日期", "")).strip()
 
-        self.records.sort(key=sort_key, reverse=True)
+        try:
+            if record_time:
+                return datetime.strptime(record_time, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            pass
+
+        try:
+            if date_str:
+                return datetime.strptime(date_str, "%Y-%m-%d")
+        except Exception:
+            pass
+
+        return datetime.min
+
+    def sort_records(self):
+        self.records.sort(key=self._get_record_sort_datetime, reverse=True)
 
     def load_data(self):
         try:
@@ -867,21 +1028,51 @@ class MainScreen(Screen):
                     loaded_records = json.load(f)
                     self.records = loaded_records if isinstance(loaded_records, list) else []
 
-            if os.path.exists(self.categories_path):
-                with open(self.categories_path, "r", encoding="utf-8") as f:
-                    loaded_categories = json.load(f)
-                    if isinstance(loaded_categories, list):
-                        for cat in loaded_categories:
-                            if isinstance(cat, str) and cat.strip() and cat not in self.categories:
-                                self.categories.append(cat)
+            loaded_categories = self._load_categories_from_file()
+            if loaded_categories is not None:
+                # 文件中的分类列表才是用户真实配置（含顺序与删除结果），
+                # 不要把默认分类重新补进用户已经保存的配置。
+                self.categories = loaded_categories
 
             self.sort_records()
             self.category_spinner.values = self.categories
-            if self.categories:
+            if self.category_spinner.text not in self.categories and self.categories:
                 self.category_spinner.text = self.categories[0]
         except Exception as e:
             self.records = []
             self.show_popup("提示", f"读取本地数据失败：\n{str(e)}")
+
+    def _load_categories_from_file(self):
+        """读取 categories.json 并清洗为有效分类列表。
+
+        清洗规则：只接受字符串、strip 前后空格、丢弃空字符串、
+        去除重复值（保留第一次出现的位置）、保持文件中的原始顺序。
+
+        文件缺失、解析失败、类型错误或清洗后没有有效分类时返回 None，
+        由调用方回退到默认分类。
+        """
+        if not os.path.exists(self.categories_path):
+            return None
+        try:
+            with open(self.categories_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+        except Exception:
+            return None
+        if not isinstance(loaded, list):
+            return None
+        cleaned = []
+        seen = set()
+        for item in loaded:
+            if not isinstance(item, str):
+                continue
+            name = item.strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            cleaned.append(name)
+        if not cleaned:
+            return None
+        return cleaned
 
     def save_data(self):
         try:
@@ -1135,7 +1326,7 @@ class MainScreen(Screen):
             orientation="vertical", spacing=dp(12), padding=[CARD_PADDING] * 4, size_hint_y=None
         )
         details.bind(minimum_height=details.setter("height"))
-        details.add_widget(self._build_category_stats_section(category_stats, total, empty_text))
+        details.add_widget(self._build_category_stats_section(category_stats, total, empty_text, records, selected_period))
         if self.stats_mode == "year":
             monthly_totals = self.get_monthly_totals_for_year(selected_period)
             details.add_widget(self._build_year_monthly_totals_section(monthly_totals))
@@ -1268,13 +1459,17 @@ class MainScreen(Screen):
                 year_records.append(record)
         return year_records
 
+    def _get_category_name(self, record):
+        """与统计一致的分类名称标准化：空值/空字符串统一归为“未分类”。"""
+        return str(record.get("分类", "未分类")).strip() or "未分类"
+
     def get_category_stats(self, records):
         category_stats = {}
         for record in records:
             amount = self._get_record_amount(record)
             if amount is None:
                 continue
-            category = str(record.get("分类", "未分类")).strip() or "未分类"
+            category = self._get_category_name(record)
             category_stats[category] = category_stats.get(category, 0.0) + amount
         return sorted(category_stats.items(), key=lambda x: x[1], reverse=True)
 
@@ -1345,12 +1540,29 @@ class MainScreen(Screen):
         row.add_widget(amount_label)
         return row
 
-    def _build_category_stats_section(self, category_stats, total, empty_text):
+    def _build_category_stats_section(self, category_stats, total, empty_text, records, selected_period):
         section = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
         section.bind(minimum_height=section.setter("height"))
 
+        title_row = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(8))
+        title_label = self._make_stats_label("分类消费", sp(17), dp(32), COLOR_TEXT, halign="left")
+        rank_button = self._make_text_button("消费排名", height=dp(32), font_size=sp(15))
+        rank_button.size_hint_x = None
+        rank_button.width = dp(100)
+        rank_button.bind(on_press=lambda instance: self.show_top_consumption_ranking(records, selected_period))
+        title_row.add_widget(title_label)
+        title_row.add_widget(rank_button)
+        section.add_widget(title_row)
+
         if total > 0:
-            chart = CategoryPieChart(category_stats, size_hint_y=None, height=dp(190))
+            chart = CategoryPieChart(
+                category_stats,
+                size_hint_y=None,
+                height=dp(190),
+                on_category_press=lambda category: self.show_category_records(
+                    category, records, selected_period
+                ),
+            )
             section.add_widget(chart)
         else:
             section.add_widget(self._make_stats_label(
@@ -1381,6 +1593,115 @@ class MainScreen(Screen):
                 COLOR_TEXT_SECONDARY
             ))
         return section
+
+    def show_category_records(self, category, records, period):
+        """显示某分类在当前统计周期内的消费记录；复用 RecordRow 与 show_record_detail。"""
+        period_suffix = "年度统计" if self.stats_mode == "year" else "月度统计"
+        category_records = [
+            record for record in records
+            if isinstance(record, dict) and self._get_category_name(record) == category
+        ]
+        category_records.sort(key=self._get_record_sort_datetime, reverse=True)
+
+        total = 0.0
+        valid_count = 0
+        for record in category_records:
+            amount = self._get_record_amount(record)
+            if amount is not None:
+                total += amount
+                valid_count += 1
+
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
+
+        summary = BoxLayout(orientation="vertical", spacing=dp(2), size_hint_y=None, height=dp(76))
+        summary.add_widget(self._make_stats_label(
+            f"{period}  {period_suffix}", sp(14), dp(24), COLOR_TEXT_SECONDARY, halign="left"
+        ))
+        summary.add_widget(self._make_stats_label(
+            f"总支出：{total:.2f} 元", sp(18), dp(28), COLOR_TEXT, halign="left"
+        ))
+        summary.add_widget(self._make_stats_label(
+            f"记录数量：{valid_count} 条", sp(14), dp(24), COLOR_TEXT_SECONDARY, halign="left"
+        ))
+        content.add_widget(summary)
+
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
+        list_box = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+        list_box.bind(minimum_height=list_box.setter("height"))
+        if category_records:
+            for record in category_records:
+                list_box.add_widget(RecordRow(record, self.show_record_detail))
+        else:
+            list_box.add_widget(self._make_stats_label(
+                "该分类在本周期内没有有效消费记录", sp(15), dp(120), COLOR_TEXT_SECONDARY
+            ))
+        scroll.add_widget(list_box)
+        content.add_widget(scroll)
+
+        close_btn = self._make_text_button("关闭")
+        content.add_widget(close_btn)
+
+        popup = self._make_popup(category, content, (0.92, 0.86))
+        close_btn.bind(on_press=popup.dismiss)
+        popup.open()
+
+    def get_top_consumption_records(self, records, limit=20):
+        """当前周期内单笔消费金额最高的前 limit 条记录。
+
+        只允许有效正数金额参与；排序键为（金额，记录时间）双降序，
+        金额相同时记录时间较新的排前面；不修改原始 records。
+        """
+        valid_records = [
+            record for record in records
+            if isinstance(record, dict) and self._get_record_amount(record) is not None
+        ]
+        valid_records.sort(
+            key=lambda record: (
+                self._get_record_amount(record),
+                self._get_record_sort_datetime(record),
+            ),
+            reverse=True,
+        )
+        return valid_records[:limit]
+
+    def show_top_consumption_ranking(self, records, period):
+        """显示当前统计周期内单笔消费金额最高的前 20 条记录。"""
+        period_suffix = "年度统计" if self.stats_mode == "year" else "月度统计"
+        ranked = self.get_top_consumption_records(records)
+
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
+
+        summary = BoxLayout(orientation="vertical", spacing=dp(2), size_hint_y=None, height=dp(60))
+        summary.add_widget(self._make_stats_label(
+            f"{period}  {period_suffix}", sp(14), dp(22), COLOR_TEXT_SECONDARY, halign="left"
+        ))
+        summary.add_widget(self._make_stats_label(
+            "当前周期单笔消费前20", sp(16), dp(26), COLOR_TEXT, halign="left"
+        ))
+        content.add_widget(summary)
+
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
+        list_box = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+        list_box.bind(minimum_height=list_box.setter("height"))
+        if ranked:
+            for index, record in enumerate(ranked):
+                list_box.add_widget(self._make_ranking_record_row(index + 1, record))
+        else:
+            list_box.add_widget(self._make_stats_label(
+                "当前周期暂无有效消费记录", sp(15), dp(120), COLOR_TEXT_SECONDARY
+            ))
+        scroll.add_widget(list_box)
+        content.add_widget(scroll)
+
+        close_btn = self._make_text_button("关闭")
+        content.add_widget(close_btn)
+
+        popup = self._make_popup("单笔消费排名", content, (0.92, 0.86))
+        close_btn.bind(on_press=popup.dismiss)
+        popup.open()
+
+    def _make_ranking_record_row(self, rank, record):
+        return RankingRecordRow(rank, record, self.show_record_detail)
 
     def _make_month_total_row(self, month, amount):
         row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(38), spacing=dp(8))
@@ -1470,7 +1791,7 @@ class MainScreen(Screen):
         scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
         scroll_content = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None)
         scroll_content.bind(minimum_height=scroll_content.setter("height"))
-        scroll_content.add_widget(self._build_category_stats_section(category_stats, total, empty_text))
+        scroll_content.add_widget(self._build_category_stats_section(category_stats, total, empty_text, records, period_value))
 
         if is_year:
             scroll_content.add_widget(self._build_year_monthly_totals_section(monthly_totals))
@@ -1527,15 +1848,28 @@ class MainScreen(Screen):
 
         grid.clear_widgets()
         for category in self.categories:
-            row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+            row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
             name_label = Label(
                 text=category, color=COLOR_TEXT, font_size=sp(17), halign="left", valign="middle"
             )
             name_label.bind(size=lambda inst, val: setattr(inst, "text_size", val))
             row.add_widget(name_label)
 
-            delete_btn = self._make_danger_button("删除", font_size=sp(16))
-            delete_btn.size_hint = (0.28, 1)
+            move_up_btn = self._make_secondary_button("上移", font_size=sp(14))
+            move_up_btn.size_hint_x = None
+            move_up_btn.width = dp(58)
+            move_up_btn.bind(on_press=lambda btn, cat=category: self.move_category(cat, -1))
+            row.add_widget(move_up_btn)
+
+            move_down_btn = self._make_secondary_button("下移", font_size=sp(14))
+            move_down_btn.size_hint_x = None
+            move_down_btn.width = dp(58)
+            move_down_btn.bind(on_press=lambda btn, cat=category: self.move_category(cat, 1))
+            row.add_widget(move_down_btn)
+
+            delete_btn = self._make_danger_button("删除", font_size=sp(14))
+            delete_btn.size_hint_x = None
+            delete_btn.width = dp(58)
             delete_btn.bind(on_press=lambda btn, cat=category: self.confirm_delete_category(cat))
             row.add_widget(delete_btn)
 
@@ -1584,6 +1918,23 @@ class MainScreen(Screen):
         self._refresh_categories_grid()
         self.refresh_settings_page()
         self.show_popup("成功", f"已删除分类：{category}")
+
+    def move_category(self, category, offset):
+        """上移(offset=-1)或下移(offset=1)一个分类。
+
+        只改变 self.categories 的顺序，不修改历史账单中的分类字段；
+        边界外操作（第一项上移、最后一项下移、分类不存在）安全返回。
+        """
+        if offset == 0 or category not in self.categories:
+            return
+        index = self.categories.index(category)
+        target = index + offset
+        if target < 0 or target >= len(self.categories):
+            return
+        self.categories[index], self.categories[target] = self.categories[target], self.categories[index]
+        self._sync_category_spinner()
+        self.save_data()
+        self._refresh_categories_grid()
 
     # =========================
     # 查看记录
