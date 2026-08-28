@@ -27,6 +27,8 @@
 
 > 说明：这里的“无广告”仅表示当前项目代码不包含广告功能或广告 SDK，不代表对未来版本、第三方修改版或重新打包版本作出保证。
 
+Noto Serif SC is licensed under the SIL Open Font License 1.1.
+
 ## 设计目标
 
 本项目强调以下设计方向：
@@ -253,7 +255,7 @@ billing-app-android/
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 ├── .gitignore
-├── simkai.ttf
+├── NotoSerifSC-Regular.otf
 ├── README_安卓打包说明.txt
 └── .github/
     └── workflows/

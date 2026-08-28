@@ -11,11 +11,11 @@ from kivy.utils import escape_markup, platform
 # =========================
 # 字体设置
 # =========================
-# 电脑端：优先用 Windows 楷体
-# 安卓端：用项目目录里的 simkai.ttf
+# 电脑端：优先用系统安装的 Noto Serif SC
+# 安卓端：用项目目录里的 NotoSerifSC-Regular.otf
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-WINDOWS_FONT_PATH = r"C:\Windows\Fonts\simkai.ttf"
-LOCAL_FONT_PATH = os.path.join(APP_DIR, "simkai.ttf")
+WINDOWS_FONT_PATH = r"C:\Windows\Fonts\NotoSerifSC-Regular.ttf"
+LOCAL_FONT_PATH = os.path.join(APP_DIR, "NotoSerifSC-Regular.otf")
 
 font_path = None
 if platform == "win" and os.path.exists(WINDOWS_FONT_PATH):
