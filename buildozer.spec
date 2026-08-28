@@ -7,6 +7,8 @@ source.dir = .
 source.include_exts = py,ttf
 version = 1.0
 requirements = python3,kivy,openpyxl,et_xmlfile
+# develop 分支包含 pip 损坏修复（#3360/#3366）；master 分支的 venv pip 升级存在混合损坏 bug
+p4a.branch = develop
 orientation = portrait
 fullscreen = 0
 # 导入导出均使用 Android SAF 系统文件选择器，数据保存在应用私有目录，无需存储权限
