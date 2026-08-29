@@ -53,7 +53,8 @@ from kivy.clock import Clock
 from kivy.animation import Animation
 from kivy.properties import NumericProperty
 
-from openpyxl import Workbook, load_workbook
+# openpyxl（Excel 导入导出）较慢，仅在用户实际导入/导出时按需导入，
+# 避免把 ~1s 的 openpyxl 加载放入冷启动关键路径。
 
 # 桌面端设置最小窗口，安卓端不受影响
 if platform in ("win", "linux", "macosx"):
@@ -736,13 +737,16 @@ class MainScreen(Screen):
 
         root.bind(pos=update_root_bg, size=update_root_bg)
         self.page_manager = ScreenManager()
+        # 主页面切换动画：Kivy 默认 SlideTransition 0.4s → 0.2s（约 2 倍提速）
+        self.page_manager.transition.duration = 0.2
         self._nav_buttons = {}
+        # 冷启动只构建首屏（记账页）；支出/收入/统计/设置页在首次进入时
+        # 由 _ensure_screen 按需构建，减少首屏路径上的控件构建工作。
         self.page_manager.add_widget(self._build_accounting_screen())
-        self.page_manager.add_widget(self._build_records_screen())
-        self.page_manager.add_widget(self._build_income_screen())
-        self.page_manager.add_widget(self._build_stats_screen())
-        self.page_manager.add_widget(self._build_settings_screen())
         root.add_widget(self.page_manager)
+        # 共享固定底栏：位于 ScreenManager 内容区之外，切换页面时保持静止
+        self.shared_nav = self._build_shared_nav()
+        root.add_widget(self.shared_nav)
         self.add_widget(root)
         Window.bind(on_keyboard=self._handle_back_key)
         self.bind(parent=self._unbind_window_keyboard)
@@ -770,38 +774,61 @@ class MainScreen(Screen):
         scroll.add_widget(content)
         return scroll
 
-    def _make_bottom_navigation(self, selected_page):
+    def _build_shared_nav(self):
+        """共享固定底部导航：位于 ScreenManager 内容区之外，切换页面时不移动。
+
+        容器只创建一次；income_enabled 变化时仅重建内部按钮（_refresh_shared_nav）。"""
         nav = BoxLayout(
             size_hint_y=None, height=dp(64), spacing=dp(8),
             padding=[PAGE_PADDING, dp(8), PAGE_PADDING, dp(8)]
         )
         self._add_rounded_background(nav, COLOR_CARD_BG, 0, COLOR_BORDER)
+        self._refresh_shared_nav(nav)
+        return nav
+
+    def _refresh_shared_nav(self, nav=None):
+        """按 income_enabled 重建共享底栏按钮，并保持当前选中页高亮。"""
+        nav = nav or self.shared_nav
+        nav.clear_widgets()
+        self._nav_buttons = {}
         nav_pages = [("accounting", "记账"), ("records", "支出")]
         if self.income_enabled:
             nav_pages.append(("income", "收入"))
         nav_pages.append(("stats", "统计"))
         for page_name, text in nav_pages:
-            selected = page_name == selected_page
             button = self._make_button(
                 text,
-                COLOR_PRIMARY if selected else COLOR_PRIMARY_LIGHT,
-                COLOR_WHITE if selected else COLOR_TEXT_SECONDARY,
+                COLOR_PRIMARY_LIGHT,
+                COLOR_TEXT_SECONDARY,
                 height=dp(48),
                 font_size=sp(16)
             )
             button.bind(on_press=lambda instance, target=page_name: self.switch_page(target))
             nav.add_widget(button)
-            self._nav_buttons[(selected_page, page_name)] = button
-        return nav
+            self._nav_buttons[page_name] = button
+        self._update_nav_selection(self.page_manager.current)
 
-    def _refresh_all_bottom_navigations(self):
-        """收入开关变化后重建四个主页面底栏（记账/支出/收入/统计）。"""
-        for page_name in ("accounting", "records", "income", "stats"):
-            screen = self.page_manager.get_screen(page_name)
-            page = screen.children[0]
-            if page.children:
-                page.remove_widget(page.children[0])  # 旧底栏（始终是最后添加的第一个子项）
-            page.add_widget(self._make_bottom_navigation(page_name))
+    def _update_nav_selection(self, page_name):
+        """更新共享底栏选中高亮（当前页主色高亮，其余弱化）。"""
+        for name, btn in self._nav_buttons.items():
+            selected = name == page_name
+            btn.background_color = COLOR_PRIMARY if selected else COLOR_PRIMARY_LIGHT
+            btn.color = COLOR_WHITE if selected else COLOR_TEXT_SECONDARY
+
+    def _ensure_screen(self, page_name):
+        """按需构建页面骨架：首屏（记账页）在 build_ui 中构建，
+        其余页面首次进入时在此构建；数据填充仍由各页 dirty 刷新逻辑负责。"""
+        if self.page_manager.has_screen(page_name):
+            return
+        builder = {
+            "records": self._build_records_screen,
+            "income": self._build_income_screen,
+            "stats": self._build_stats_screen,
+            "settings": self._build_settings_screen,
+        }.get(page_name)
+        if builder is not None:
+            self.page_manager.add_widget(builder())
+
 
     def _build_accounting_screen(self):
         screen = Screen(name="accounting")
@@ -882,7 +909,6 @@ class MainScreen(Screen):
         content.add_widget(form_card)
 
         page.add_widget(self._make_page_scroll(content))
-        page.add_widget(self._make_bottom_navigation("accounting"))
         screen.add_widget(page)
         return screen
 
@@ -904,7 +930,6 @@ class MainScreen(Screen):
         records_card.add_widget(self.records_list)
         content.add_widget(records_card)
         page.add_widget(self._make_page_scroll(content))
-        page.add_widget(self._make_bottom_navigation("records"))
         screen.add_widget(page)
         return screen
 
@@ -926,7 +951,6 @@ class MainScreen(Screen):
         income_card.add_widget(self.income_list)
         content.add_widget(income_card)
         page.add_widget(self._make_page_scroll(content))
-        page.add_widget(self._make_bottom_navigation("income"))
         screen.add_widget(page)
         return screen
 
@@ -968,7 +992,6 @@ class MainScreen(Screen):
         self.stats_results.bind(minimum_height=self.stats_results.setter("height"))
         content.add_widget(self.stats_results)
         page.add_widget(self._make_page_scroll(content))
-        page.add_widget(self._make_bottom_navigation("stats"))
         screen.add_widget(page)
         return screen
 
@@ -1067,7 +1090,7 @@ class MainScreen(Screen):
             return
         self.income_enabled = value
         self._save_settings()
-        self._refresh_all_bottom_navigations()
+        self._refresh_shared_nav()
         self._sync_category_spinner()
         self.income_page_dirty = True
         self.stats_page_dirty = True
@@ -1080,6 +1103,7 @@ class MainScreen(Screen):
         性能：记录/收入/统计页采用按需刷新（dirty flag）——数据未变化时
         直接显示已有页面，避免每次切换都重建列表与统计。
         """
+        self._ensure_screen(page_name)  # 未构建的页面（支出/收入/统计/设置）首次进入时构建
         current_page = self.page_manager.current
         if page_name == "records":
             if self.records_page_dirty:
@@ -1103,6 +1127,10 @@ class MainScreen(Screen):
         if direction is not None:
             self.page_manager.transition.direction = direction
         self.page_manager.current = page_name
+        # 共享底栏：更新选中高亮；设置页无底栏（高度收起，内容区占满）
+        self._update_nav_selection(page_name)
+        self.shared_nav.size_hint_y = None
+        self.shared_nav.height = dp(64) if page_name != "settings" else 0
 
     def _get_page_transition_direction(self, current_page, target_page):
         """根据页面顺序判定切换动画方向，返回 None 表示无需动画。"""
@@ -1120,6 +1148,7 @@ class MainScreen(Screen):
 
     def refresh_records_page(self):
         """按既有排序规则刷新支出页最近 50 条记录（只显示记录类型为“支出”）。"""
+        self._ensure_screen("records")  # 页面按需构建：直接刷新时先确保骨架存在
         self.sort_records()
         self.records_list.clear_widgets()
         display_records = [
@@ -1146,6 +1175,7 @@ class MainScreen(Screen):
 
     def refresh_income_page(self):
         """刷新收入页：只显示记录类型为“收入”的记录（最多 50 条）。"""
+        self._ensure_screen("income")  # 页面按需构建：直接刷新时先确保骨架存在
         self.sort_records()
         self.income_list.clear_widgets()
         display_records = [
@@ -1680,6 +1710,7 @@ class MainScreen(Screen):
 
     def refresh_stats_page(self, reset_period=False):
         """用共享数据重建统计结果；页面控件本身始终只创建一次。"""
+        self._ensure_screen("stats")  # 页面按需构建：直接刷新时先确保骨架存在
         periods = self._get_stats_periods()
         current_period = datetime.now().strftime("%Y" if self.stats_mode == "year" else "%Y-%m")
         selected_period = self.stats_period_spinner.text
@@ -2669,6 +2700,7 @@ class MainScreen(Screen):
         return f"{type(error).__name__}: {str(error)}"
 
     def _create_excel_temp_file(self, timestamp):
+        from openpyxl import Workbook  # 按需导入（避免冷启动加载 openpyxl）
         temp_path = os.path.join(self.storage_dir, f"export_temp_{timestamp}.xlsx")
         wb = Workbook()
         ws = wb.active
@@ -3168,6 +3200,7 @@ class MainScreen(Screen):
                     imported_records = list(reader)
 
             elif file_path.lower().endswith(".xlsx"):
+                from openpyxl import load_workbook  # 按需导入（避免冷启动加载 openpyxl）
                 wb = load_workbook(file_path, data_only=True)
                 ws = wb.active
                 rows = list(ws.iter_rows(values_only=True))

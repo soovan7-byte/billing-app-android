@@ -209,7 +209,7 @@ CSV 导出用于表格软件或其他程序读取：
 
 ### 安装与运行
 
-稳定版本安装包已发布在仓库 **Releases** 页面（当前版本 v1.0.0），附带经过 Android 真机验证的 arm64-v8a APK。项目未发布到应用商店。
+稳定版本安装包已发布在仓库 **Releases** 页面（当前版本 v1.0.1），附带经过 Android 真机验证的 arm64-v8a APK。项目未发布到应用商店。
 
 通过 GitHub Actions 构建最新代码 APK 的参考步骤：
 
@@ -362,7 +362,7 @@ buildozer android debug
 
 ## 分支与开发方式
 
-- `main` 用于保存经过验证的稳定版本（当前 v1.0.0）；
+- `main` 用于保存经过验证的稳定版本（当前 v1.0.1）；
 - 新功能和修复应通过独立分支开发；
 - 修改完成后通过 Pull Request 合并；
 - 涉及 Kivy UI、Android SAF、导入导出、权限或构建配置时，应进行 Android 实机测试。
