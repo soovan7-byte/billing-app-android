@@ -67,5 +67,11 @@ import_temp_*.json
 *backup*.csv
 *backup*.xlsx
 
+# Buildozer build outputs and caches
+.buildozer/
+bin/
+apk/
+*.spec.bak
+
 # Assistant/local tooling
 .aider*
