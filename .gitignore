@@ -45,6 +45,7 @@ Thumbs.db
 # Local app data
 records.json
 categories.json
+settings.json
 
 # Import/export temporary files
 export_temp_*.xlsx

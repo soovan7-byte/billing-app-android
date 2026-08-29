@@ -49,6 +49,7 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
 from kivy.clock import Clock
+from kivy.animation import Animation
 
 from openpyxl import Workbook, load_workbook
 
@@ -136,10 +137,15 @@ class ThemedSpinnerOption(SpinnerOption):
 
 
 class RecordRow(ButtonBehavior, BoxLayout):
-    """支出页中可直接点击的记录卡片。"""
+    """支出/收入页中可直接点击的记录卡片。
+
+    两层布局：第一行“日期 · 分类”使用整卡宽度（单行稳定：正常字号 →
+    轻微缩小 → 单行省略），第二行左侧备注 + 右侧固定宽度金额，
+    避免金额列挤压第一行导致分类换行。
+    """
     def __init__(self, record, on_open, **kwargs):
         super().__init__(
-            orientation="horizontal", spacing=dp(12), padding=[dp(14), dp(10)],
+            orientation="vertical", spacing=dp(6), padding=[dp(14), dp(10)],
             size_hint_y=None, height=dp(76), **kwargs
         )
         self.record = record
@@ -162,21 +168,71 @@ class RecordRow(ButtonBehavior, BoxLayout):
         self.bind(pos=update_canvas, size=update_canvas)
         self.bind(on_release=lambda instance: on_open(self.record))
 
-        text_box = BoxLayout(orientation="vertical", spacing=dp(2))
+        # ---- 第一行：日期 · 分类（整卡宽度，单行稳定） ----
         meta = Label(
             text=f"{record.get('日期', '')}  ·  {record.get('分类', '')}",
             color=COLOR_TEXT_SECONDARY, font_size=sp(13), halign="left", valign="middle",
-            size_hint_y=None, height=dp(22)
+            size_hint_y=None, height=dp(22), shorten=True, shorten_from="right", max_lines=1
         )
-        meta.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        meta._fit_lock = False
+        meta._fit_evt = None
+        meta._last_shrink = False
+
+        def decide_meta(inst, avail):
+            """收敛决策：完整渲染测量 → 超宽则缩字号（下限 11）→ 恢复字号（上限 13）→ 单行省略。"""
+            inst._fit_lock = True
+            try:
+                inst.text_size = (None, None)  # 完整渲染，测量真实宽度
+                Clock.schedule_once(lambda dt: settle_meta(inst, avail), 0.05)
+            finally:
+                inst._fit_lock = False
+
+        def settle_meta(inst, avail):
+            if inst._fit_lock:
+                Clock.schedule_once(lambda dt: settle_meta(inst, avail), 0.05)
+                return
+            inst._fit_lock = True
+            try:
+                tex_w = inst.texture_size[0]
+                if tex_w > avail:
+                    if inst.font_size > sp(11):
+                        # 轻微缩小字号保持单行（最多到下限 11）
+                        inst.font_size = max(sp(11), inst.font_size - sp(1))
+                        inst._last_shrink = True
+                        Clock.schedule_once(lambda dt: settle_meta(inst, avail), 0.05)
+                        return
+                    # 达到最小字号仍超宽 → shorten 单行省略（不换行）
+                    inst.text_size = (avail, None)
+                    return
+                # 空间充足：恢复正常字号（若本轮未缩小过，防止 12↔13 振荡）
+                if inst.font_size < sp(13) and not inst._last_shrink:
+                    inst.font_size = sp(13)
+                    Clock.schedule_once(lambda dt: settle_meta(inst, avail), 0.05)
+                    return
+                inst._last_shrink = False
+                inst.text_size = (None, None)  # 正常字号单行
+            finally:
+                inst._fit_lock = False
+
+        def schedule_meta_fit(inst, val):
+            if inst._fit_lock:
+                return
+            if inst._fit_evt is not None:
+                inst._fit_evt.cancel()
+            # 等布局宽度稳定后再决策，避免用布局前的临时宽度误缩字号
+            inst._fit_evt = Clock.schedule_once(lambda dt: decide_meta(inst, inst.width), 0.12)
+
+        meta.bind(size=schedule_meta_fit)
+        self.add_widget(meta)
+
+        # ---- 第二行：备注（弹性） + 金额（固定宽度，右对齐） ----
+        content_row = BoxLayout(orientation="horizontal", spacing=dp(12), size_hint_y=None)
         note = Label(
             text=str(record.get("姓名/备注", "")), color=COLOR_TEXT, font_size=sp(16),
             halign="left", valign="middle", shorten=True, shorten_from="right", max_lines=1
         )
         note.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
-        text_box.add_widget(meta)
-        text_box.add_widget(note)
-        self.add_widget(text_box)
+        content_row.add_widget(note)
 
         try:
             amount_text = f"{float(record.get('金额', 0)):.2f} 元"
@@ -184,21 +240,78 @@ class RecordRow(ButtonBehavior, BoxLayout):
             amount_text = f"{record.get('金额', '')} 元"
         amount = Label(
             text=amount_text, color=COLOR_PRIMARY, font_size=sp(17), bold=True,
-            halign="right", valign="middle", size_hint_x=None, width=dp(112)
+            halign="right", valign="middle", size_hint_x=None, width=dp(120),
+            shorten=False, max_lines=1
         )
-        amount.bind(size=lambda inst, val: setattr(inst, "text_size", val))
-        self.add_widget(amount)
+        amount.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        content_row.add_widget(amount)
+        self.add_widget(content_row)
+
+
+def _fit_single_line_label(label, min_font, max_font):
+    """单行三级适配：正常字号单行 → 轻微缩小字号 → 单行省略（延迟收敛）。
+
+    绑定 label 的 size 变化；布局宽度稳定后按真实 texture 宽度决策，
+    避免用布局前的临时宽度误缩字号，并防止缩小/恢复振荡。
+    """
+    label._fit_lock = False
+    label._fit_evt = None
+    label._last_shrink = False
+
+    def decide(inst, avail):
+        inst._fit_lock = True
+        try:
+            inst.text_size = (None, None)  # 完整渲染，测量真实宽度
+            Clock.schedule_once(lambda dt: settle(inst, avail), 0.05)
+        finally:
+            inst._fit_lock = False
+
+    def settle(inst, avail):
+        if inst._fit_lock:
+            Clock.schedule_once(lambda dt: settle(inst, avail), 0.05)
+            return
+        inst._fit_lock = True
+        try:
+            tex_w = inst.texture_size[0]
+            if tex_w > avail:
+                if inst.font_size > min_font:
+                    inst.font_size = max(min_font, inst.font_size - sp(1))
+                    inst._last_shrink = True
+                    Clock.schedule_once(lambda dt: settle(inst, avail), 0.05)
+                    return
+                inst.text_size = (avail, None)  # 达到下限仍超宽 → 单行省略
+                return
+            if inst.font_size < max_font and not inst._last_shrink:
+                inst.font_size = max_font
+                Clock.schedule_once(lambda dt: settle(inst, avail), 0.05)
+                return
+            inst._last_shrink = False
+            inst.text_size = (None, None)  # 正常字号单行
+        finally:
+            inst._fit_lock = False
+
+    def schedule(inst, val):
+        if inst._fit_lock:
+            return
+        if inst._fit_evt is not None:
+            inst._fit_evt.cancel()
+        inst._fit_evt = Clock.schedule_once(lambda dt: decide(inst, inst.width), 0.12)
+
+    label.bind(size=schedule)
 
 
 class RankingRecordRow(ButtonBehavior, BoxLayout):
-    """消费排名列表中可点击的单条记录行：排名 + 分类/日期 + 完整备注 + 金额。
+    """消费排名列表中可点击的单条记录行（三行式结构）。
 
-    行高根据内容自适应（备注支持多行完整显示），避免长备注被截断后
-    同分类的多笔消费无法区分；点击行打开该记录自身的详情。
+    第 1 行：序号（单独一行，左对齐）
+    第 2 行：日期 · 分类（灰色小字，单行稳定：正常字号 → 轻微缩小 → 单行省略）
+    第 3 行：备注（弹性） + 金额（固定宽度，右对齐）
+
+    点击行打开该记录自身的详情。
     """
     def __init__(self, rank, record, on_open, **kwargs):
         super().__init__(
-            orientation="horizontal", spacing=dp(12), padding=[dp(14), dp(10)],
+            orientation="vertical", spacing=dp(4), padding=[dp(14), dp(10)],
             size_hint_y=None, **kwargs
         )
         self.record = record
@@ -221,33 +334,32 @@ class RankingRecordRow(ButtonBehavior, BoxLayout):
         self.bind(pos=update_canvas, size=update_canvas)
         self.bind(on_release=lambda instance: on_open(self.record))
 
+        # ---- 第 1 行：序号（单独一行，左对齐） ----
         rank_label = Label(
-            text=str(rank), color=COLOR_PRIMARY, font_size=sp(20), bold=True,
-            halign="center", valign="middle", size_hint_x=None, width=dp(40),
-            size_hint_y=None, height=dp(44)
+            text=str(rank), color=COLOR_PRIMARY, font_size=sp(18), bold=True,
+            halign="left", valign="middle", size_hint_y=None, height=dp(22)
         )
-        rank_label.bind(size=lambda inst, val: setattr(inst, "text_size", val))
-        rank_label.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(44), val[1])))
+        rank_label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
         self.add_widget(rank_label)
 
-        # 中列：竖向文本区（上方元信息单行，下方备注最多两行），宽度由
-        # “卡片总宽 - 左列排名 - 右列金额 - padding/spacing”的剩余空间决定
-        text_box = BoxLayout(orientation="vertical", spacing=dp(2), size_hint_x=1, size_hint_y=None)
-        text_box.bind(minimum_height=text_box.setter("height"))
+        # ---- 第 2 行：日期 · 分类（单行稳定三级适配） ----
         meta = Label(
-            text=f"{record.get('分类', '')} · {record.get('日期', '')}",
+            text=f"{record.get('日期', '')} · {record.get('分类', '')}",
             color=COLOR_TEXT_SECONDARY, font_size=sp(13), halign="left", valign="middle",
-            size_hint_y=None, height=dp(22), shorten=True, shorten_from="right", max_lines=1
+            size_hint_y=None, height=dp(20), shorten=True, shorten_from="right", max_lines=1
         )
-        meta.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        _fit_single_line_label(meta, sp(11), sp(13))
+        self.add_widget(meta)
+
+        # ---- 第 3 行：备注（弹性） + 金额（固定宽度，右对齐） ----
+        content_row = BoxLayout(orientation="horizontal", spacing=dp(12), size_hint_y=None)
         note = Label(
             text=str(record.get("姓名/备注", "")), color=COLOR_TEXT, font_size=sp(16),
             halign="left", valign="top", shorten=False, max_lines=0,
             size_hint_y=None, height=dp(22)
         )
-        # 两行截断：先按真实剩余宽度完整渲染；若超过两行高度，
-        # 再切换为“固定两行高 + shorten”截断模式（Kivy 的 shorten 需要固定 text_size 高度），
-        # 保证 1~2 行时行高按实际内容计算、超长时稳定两行加省略号。
+        # 两行截断：先按真实剩余宽度完整渲染；超过两行后切换为
+        # “固定两行高 + shorten”截断模式（Kivy 的 shorten 需要固定 text_size 高度）。
         note._truncated = False
 
         def update_note_text_size(inst, val):
@@ -269,29 +381,122 @@ class RankingRecordRow(ButtonBehavior, BoxLayout):
 
         note.bind(size=update_note_text_size)
         note.bind(texture_size=update_note_height)
-        text_box.add_widget(meta)
-        text_box.add_widget(note)
-        self.add_widget(text_box)
+        content_row.add_widget(note)
 
         try:
             amount_text = f"{float(record.get('金额', 0)):.2f} 元"
         except (TypeError, ValueError):
             amount_text = f"{record.get('金额', '')} 元"
-        # 右列：金额固定宽度，右对齐，不截断、不被压缩
         amount = Label(
             text=amount_text, color=COLOR_PRIMARY, font_size=sp(17), bold=True,
             halign="right", valign="middle", size_hint_x=None, width=dp(120),
-            size_hint_y=None, height=dp(44), shorten=False, max_lines=1
+            size_hint_y=None, height=dp(26), shorten=False, max_lines=1
         )
         amount.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
-        amount.bind(texture_size=lambda inst, val: setattr(inst, "height", max(dp(44), val[1])))
-        self.add_widget(amount)
+        content_row.add_widget(amount)
+        self.add_widget(content_row)
 
         # 行高随内容自适应（备注多行时变高），最小保持可点击高度
         def update_height(instance, value):
             instance.height = max(instance.minimum_height, dp(56))
 
         self.bind(minimum_height=update_height)
+
+
+class IncomeTypeSwitch(ButtonBehavior, BoxLayout):
+    """自定义横向椭圆开关：左=是=收入（绿色滑道），右=否=支出（灰色滑道）。
+
+    整个组件（含“是/否”文字与滑道）都可点击切换；
+    白色圆形滑块带约 150ms 的短滑动动画。
+    """
+    def __init__(self, active=False, on_toggle=None, **kwargs):
+        super().__init__(
+            orientation="horizontal", size_hint=(None, None),
+            size=(dp(116), dp(34)), spacing=dp(6), padding=[dp(2), dp(2)], **kwargs
+        )
+        self.active = bool(active)
+        self.on_toggle = on_toggle
+
+        self.yes_label = Label(
+            text="是", font_size=sp(14), bold=True, size_hint=(None, 1), width=dp(20),
+            halign="center", valign="middle"
+        )
+        self.no_label = Label(
+            text="否", font_size=sp(14), bold=True, size_hint=(None, 1), width=dp(20),
+            halign="center", valign="middle"
+        )
+        self.add_widget(self.yes_label)
+
+        # 椭圆滑道（轨道）
+        self.track = Widget(size_hint=(None, 1), width=dp(62))
+        with self.track.canvas.before:
+            self.track_color = Color(*COLOR_BORDER)
+            self.track_rect = RoundedRectangle(
+                pos=self.track.pos, size=self.track.size, radius=[dp(14)] * 4
+            )
+
+        def update_track(instance, value):
+            self.track_rect.pos = instance.pos
+            self.track_rect.size = instance.size
+
+        self.track.bind(pos=update_track, size=update_track)
+        self.add_widget(self.track)
+        self.add_widget(self.no_label)
+
+        # 白色圆形滑块（滑道子控件，手动定位）
+        self.knob = Widget(size_hint=(None, None), size=(dp(24), dp(24)))
+        with self.knob.canvas.before:
+            Color(1, 1, 1, 1)
+            self.knob_rect = RoundedRectangle(
+                pos=self.knob.pos, size=self.knob.size, radius=[dp(12)] * 4
+            )
+
+        def update_knob(instance, value):
+            self.knob_rect.pos = instance.pos
+            self.knob_rect.size = instance.size
+
+        self.knob.bind(pos=update_knob, size=update_knob)
+        self.track.add_widget(self.knob)
+        self.track.bind(pos=self._place_knob, size=self._place_knob)
+
+        self.bind(on_release=self._toggle)
+        self._refresh_visual()
+
+    def _place_knob(self, instance, value):
+        # 滑块是滑道的子控件：坐标相对滑道
+        if self.active:
+            x = dp(2)
+        else:
+            x = instance.width - self.knob.width - dp(2)
+        y = (instance.height - self.knob.height) / 2
+        self.knob.pos = (x, y)
+
+    def _toggle(self, *args):
+        self.active = not self.active
+        self._refresh_visual()
+        if self.on_toggle:
+            self.on_toggle(self, self.active)
+
+    def _refresh_visual(self):
+        # 滑道颜色：收入=柔和绿色，支出=灰色
+        self.track_color.rgba = COLOR_SUCCESS_LIGHT if self.active else COLOR_BORDER
+        # “是/否”激活态文字
+        if self.active:
+            self.yes_label.color = COLOR_SUCCESS
+            self.no_label.color = COLOR_TEXT_SECONDARY
+        else:
+            self.yes_label.color = COLOR_TEXT_SECONDARY
+            self.no_label.color = COLOR_TEXT
+        # 滑块位置（150ms 短动画，坐标相对滑道）
+        target_x = dp(2) if self.active else (self.track.width - self.knob.width - dp(2))
+        if self.track.width > 0 and self.knob.pos[0] != target_x:
+            Animation(
+                x=target_x,
+                y=(self.track.height - self.knob.height) / 2,
+                duration=0.15,
+            ).start(self.knob)
+        else:
+            self._place_knob(self.track, None)
 
 
 class CategoryPieChart(Widget):
@@ -901,11 +1106,10 @@ class MainScreen(Screen):
         income_box.bind(minimum_height=income_box.setter("height"))
         income_row = BoxLayout(size_hint_y=None, height=CONTROL_HEIGHT, spacing=dp(8))
         income_row.add_widget(self._make_section_label("启用收入功能", font_size=sp(17), height=CONTROL_HEIGHT))
-        self.income_switch = Switch(
-            active=self.income_enabled, size_hint=(None, None),
-            size=(dp(52), dp(32)), pos_hint={"center_y": 0.5}
+        self.income_switch = IncomeTypeSwitch(
+            active=self.income_enabled, on_toggle=self._on_income_switch_changed,
+            pos_hint={"center_y": 0.5}
         )
-        self.income_switch.bind(active=self._on_income_switch_changed)
         income_row.add_widget(self.income_switch)
         income_box.add_widget(income_row)
         income_box.add_widget(Label(
@@ -1524,26 +1728,31 @@ class MainScreen(Screen):
         return [current] + [period for period in available if period != current]
 
     def _build_income_summary_card(self, period, income_total, expense_total):
-        """收入功能开启时统计页顶部的“收入 / 支出 / 收支差”卡片。"""
+        """收入功能开启时统计页顶部的“收支概览”卡片（标题在卡片内部）。"""
         card = self._make_card()
         summary = BoxLayout(
-            orientation="vertical", spacing=dp(4), padding=[CARD_PADDING] * 4,
-            size_hint_y=None, height=dp(120)
+            orientation="vertical", spacing=dp(3), padding=[CARD_PADDING] * 4,
+            size_hint_y=None, height=dp(140)
         )
-        period_suffix = "年度统计" if self.stats_mode == "year" else "月度统计"
+        period_suffix = "年度收支统计" if self.stats_mode == "year" else "月度收支统计"
         summary.add_widget(self._make_stats_label(
-            f"{period}  {period_suffix}（收入）", sp(14), dp(24), COLOR_TEXT_SECONDARY, halign="left"
+            f"{period} {period_suffix}", sp(14), dp(26), COLOR_TEXT_SECONDARY, halign="left"
         ))
         summary.add_widget(self._make_stats_label(
-            f"收入：{income_total:.2f} 元", sp(19), dp(32), COLOR_SUCCESS, halign="left"
+            f"收入：{income_total:.2f} 元", sp(17), dp(28), COLOR_SUCCESS, halign="left"
         ))
         summary.add_widget(self._make_stats_label(
-            f"支出：{expense_total:.2f} 元", sp(17), dp(30), COLOR_PRIMARY, halign="left"
+            f"支出：{expense_total:.2f} 元", sp(17), dp(28), COLOR_PRIMARY, halign="left"
         ))
         diff = income_total - expense_total
-        diff_color = COLOR_SUCCESS if diff >= 0 else COLOR_DANGER
+        if diff > 0:
+            diff_color = COLOR_SUCCESS
+        elif diff < 0:
+            diff_color = COLOR_DANGER
+        else:
+            diff_color = COLOR_TEXT_SECONDARY
         summary.add_widget(self._make_stats_label(
-            f"收支差：{diff:.2f} 元", sp(17), dp(30), diff_color, halign="left"
+            f"收支差：{diff:.2f} 元", sp(17), dp(28), diff_color, halign="left"
         ))
         card.add_widget(summary)
         return card
@@ -2120,11 +2329,10 @@ class MainScreen(Screen):
         self.new_category_input = self._make_text_input(hint_text="输入新分类")
         content.add_widget(self.new_category_input)
 
-        type_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
-        type_row.add_widget(self._make_section_label("是否为收入", font_size=sp(16), height=dp(48)))
-        self.new_category_income_switch = Switch(
-            active=False, size_hint=(None, None), size=(dp(52), dp(32)),
-            pos_hint={"center_y": 0.5}
+        type_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        type_row.add_widget(self._make_section_label("是否为收入", font_size=sp(16), height=dp(44)))
+        self.new_category_income_switch = IncomeTypeSwitch(
+            active=False, pos_hint={"center_y": 0.5}
         )
         type_row.add_widget(self.new_category_income_switch)
         content.add_widget(type_row)
@@ -2157,43 +2365,90 @@ class MainScreen(Screen):
 
         grid.clear_widgets()
         for category in self.categories:
-            row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+            row = BoxLayout(size_hint_y=None, height=dp(96), spacing=dp(8))
+
+            # ---- 分类名称：三级适配（正常字号单行 → 轻微缩小单行 → 两行） ----
             name_label = Label(
-                text=category, color=COLOR_TEXT, font_size=sp(17), halign="left", valign="middle"
+                text=category, color=COLOR_TEXT, font_size=sp(17),
+                halign="left", valign="middle", shorten=False, max_lines=1,
+                size_hint_y=None, height=dp(40)
             )
-            name_label.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+            name_label._fit_lock = False
+            name_label._two_line = False
+
+            def fit_name(inst, val):
+                if inst._fit_lock:
+                    return
+                inst._fit_lock = True
+                try:
+                    avail = inst.width
+                    if avail <= 0:
+                        return
+                    if inst._two_line:
+                        # 已锁定两行模式：保持两行，不再回退单行
+                        inst.max_lines = 2
+                        inst.text_size = (avail, None)
+                        inst.height = max(dp(40), inst.texture_size[1] + dp(4))
+                        return
+                    if inst.texture_size[0] <= avail or inst.font_size <= sp(13):
+                        if inst.font_size <= sp(13) and inst.texture_size[0] > avail:
+                            # 第三级：达到最小字号仍超宽 → 两行
+                            inst._two_line = True
+                            inst.max_lines = 2
+                            inst.text_size = (avail, None)
+                            inst.shorten = False
+                            inst.height = max(dp(40), inst.texture_size[1] + dp(4))
+                        else:
+                            # 第一/二级：单行（正常字号或已轻微缩小）
+                            inst.max_lines = 1
+                            inst.text_size = (None, None)
+                            inst.height = dp(40)
+                    else:
+                        # 第二级：按实际渲染宽度逐步轻微缩小字号
+                        inst.font_size = max(sp(13), inst.font_size - sp(1))
+                finally:
+                    inst._fit_lock = False
+
+            name_label.bind(size=fit_name)
+            name_label.bind(texture_size=fit_name)
             row.add_widget(name_label)
 
-            move_up_btn = self._make_secondary_button("上移", font_size=sp(13))
-            move_up_btn.size_hint_x = None
-            move_up_btn.width = dp(54)
+            # ---- 右侧 2×2 操作区（上移/下移 左列，类型/删除 右列） ----
+            btn_area = GridLayout(
+                cols=2, spacing=dp(4), size_hint=(None, None),
+                width=dp(132), height=dp(88)
+            )
+            move_up_btn = self._make_secondary_button("上移", font_size=sp(12))
+            move_up_btn.size_hint_y = 1
             move_up_btn.bind(on_press=lambda btn, cat=category: self.move_category(cat, -1))
-            row.add_widget(move_up_btn)
-
-            move_down_btn = self._make_secondary_button("下移", font_size=sp(13))
-            move_down_btn.size_hint_x = None
-            move_down_btn.width = dp(54)
-            move_down_btn.bind(on_press=lambda btn, cat=category: self.move_category(cat, 1))
-            row.add_widget(move_down_btn)
+            btn_area.add_widget(move_up_btn)
 
             # 分类类型切换：只影响以后新记记录的类型，不改历史记录
             if self._is_income_category(category):
                 type_btn = self._make_button(
-                    "收入", COLOR_SUCCESS_LIGHT, COLOR_SUCCESS, height=dp(48), font_size=sp(13)
+                    "收入", COLOR_SUCCESS_LIGHT, COLOR_SUCCESS, font_size=sp(12)
                 )
             else:
-                type_btn = self._make_secondary_button("支出", height=dp(48), font_size=sp(13))
-            type_btn.size_hint_x = None
-            type_btn.width = dp(54)
+                type_btn = self._make_button(
+                    "支出", COLOR_DANGER_LIGHT, COLOR_DANGER, font_size=sp(12)
+                )
+            type_btn.size_hint_y = 1
             type_btn.bind(on_press=lambda btn, cat=category: self.toggle_category_type(cat))
-            row.add_widget(type_btn)
+            btn_area.add_widget(type_btn)
 
-            delete_btn = self._make_danger_button("删除", font_size=sp(13))
-            delete_btn.size_hint_x = None
-            delete_btn.width = dp(54)
+            move_down_btn = self._make_secondary_button("下移", font_size=sp(12))
+            move_down_btn.size_hint_y = 1
+            move_down_btn.bind(on_press=lambda btn, cat=category: self.move_category(cat, 1))
+            btn_area.add_widget(move_down_btn)
+
+            delete_btn = self._make_button(
+                "删除", (0.945, 0.949, 0.957, 1), COLOR_DANGER, font_size=sp(12)
+            )
+            delete_btn.size_hint_y = 1
             delete_btn.bind(on_press=lambda btn, cat=category: self.confirm_delete_category(cat))
-            row.add_widget(delete_btn)
+            btn_area.add_widget(delete_btn)
 
+            row.add_widget(btn_area)
             grid.add_widget(row)
 
     def _sync_category_spinner(self, removed_category=None):
