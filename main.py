@@ -300,6 +300,15 @@ def _fit_single_line_label(label, min_font, max_font):
 # 注：单笔消费排名不再单独维护行组件——统一复用 RecordRow（传入 rank 参数）。
 
 
+class CategoryDetailRow(ButtonBehavior, BoxLayout):
+    """统计页“分类明细”的一行：整行可点击（色块 / 名称 / 金额 / 百分比 / 空白区域）。
+
+    只负责把整行变成可点击区域；点击后的业务处理由 MainScreen 通过
+    on_release 回调完成（与饼图共用 show_category_records）。
+    外观与 BoxLayout 完全一致，不引入额外的按压配色或高亮。
+    """
+
+
 class SwitchTrack(Widget):
     """轨道 + 白色滑块圆，二者由同一个 widget 在同一个 canvas 上绘制。
 
@@ -1931,8 +1940,13 @@ class MainScreen(Screen):
         label.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], val[1])))
         return label
 
-    def _make_category_detail_row(self, category, amount, total, color):
-        row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(54), spacing=dp(8), padding=(0, dp(4)))
+    def _make_category_detail_row(self, category, amount, total, color, on_press=None):
+        row = CategoryDetailRow(
+            orientation="horizontal", size_hint_y=None, height=dp(54), spacing=dp(8), padding=(0, dp(4))
+        )
+        if on_press is not None:
+            # 显式捕获当前分类，避免循环内 late binding
+            row.bind(on_release=lambda instance, cat=category: on_press(cat))
 
         marker_box = BoxLayout(size_hint=(None, 1), width=dp(18), padding=(0, dp(16), 0, dp(16)))
         marker = Widget(size_hint=(None, None), size=(dp(14), dp(14)))
@@ -2018,7 +2032,8 @@ class MainScreen(Screen):
         if total > 0:
             for index, (category, amount) in enumerate(category_stats):
                 section.add_widget(self._make_category_detail_row(
-                    category, amount, total, CATEGORY_CHART_COLORS[index % len(CATEGORY_CHART_COLORS)]
+                    category, amount, total, CATEGORY_CHART_COLORS[index % len(CATEGORY_CHART_COLORS)],
+                    on_press=lambda cat: self.show_category_records(cat, records, selected_period)
                 ))
         else:
             section.add_widget(self._make_stats_label(
