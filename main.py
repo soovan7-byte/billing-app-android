@@ -544,7 +544,7 @@ class MainScreen(Screen):
     # =========================
     def get_storage_dir(self):
         app = App.get_running_app()
-        if platform == "android" and app is not None:
+        if platform in ("android", "ios") and app is not None:
             return app.user_data_dir
         return APP_DIR
 
@@ -2683,19 +2683,21 @@ class MainScreen(Screen):
     def export_data(self, instance):
         content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
 
-        btn_xlsx = self._make_secondary_button("导出 Excel：账单表格")
         btn_csv = self._make_secondary_button("导出 CSV：账单表格")
         btn_json = self._make_secondary_button("导出完整备份 JSON：账单和分类")
         btn_close = self._make_text_button("关闭")
 
         popup = self._make_popup("导出数据", content, (0.86, 0.54))
 
-        btn_xlsx.bind(on_press=lambda btn: self.export_to_excel(popup))
+        if platform != "ios":
+            btn_xlsx = self._make_secondary_button("导出 Excel：账单表格")
+            btn_xlsx.bind(on_press=lambda btn: self.export_to_excel(popup))
         btn_csv.bind(on_press=lambda btn: self.export_to_csv(popup))
         btn_json.bind(on_press=lambda btn: self.export_to_json(popup))
         btn_close.bind(on_press=popup.dismiss)
 
-        content.add_widget(btn_xlsx)
+        if platform != "ios":
+            content.add_widget(btn_xlsx)
         content.add_widget(btn_csv)
         content.add_widget(btn_json)
         content.add_widget(btn_close)
@@ -3021,9 +3023,13 @@ class MainScreen(Screen):
             self._start_android_document_import()
             return
 
+        filters = ["*.json", "*.csv"]
+        if platform != "ios":
+            filters.append("*.xlsx")
+
         chooser = FileChooserListView(
             path=self.get_default_import_dir(),
-            filters=["*.json", "*.csv", "*.xlsx"],
+            filters=filters,
             size_hint=(1, 1)
         )
 
