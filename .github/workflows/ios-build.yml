@@ -232,7 +232,10 @@ jobs:
           lipo -info "${executable_path}" | tee executable-lipo.txt
           xcrun vtool -show-build "${executable_path}" | tee executable-platform.txt
           grep -q 'arm64' executable-file.txt executable-lipo.txt
-          grep -q 'platform IOS' executable-platform.txt
+          if ! grep -qE 'platform IOS|LC_VERSION_MIN_IPHONEOS' executable-platform.txt; then
+            echo "The executable does not contain an iPhoneOS platform load command." >&2
+            exit 1
+          fi
 
           font_path="$(find "${app_path}" -type f -name 'NotoSerifSC-Regular.otf' -print -quit)"
           main_source="$(find "${app_path}" -type f \( -name 'main.py' -o -name 'main.pyc' \) -print -quit)"
